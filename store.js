@@ -4,20 +4,21 @@
 import { firebaseConfig } from './firebase-config.js';
 import { uid, monthKey, normLogin } from './util.js';
 
-// Звания по сумме баллов (порог → звание). Админ может поменять в настройках.
+// Звания по сумме баллов (порог → звание) по Положению о балльной системе. Админ может поменять в настройках.
 export const DEFAULT_RANKS = [
   [0, 'Рядовой'], [50, 'Ефрейтор'], [100, 'Младший сержант'], [150, 'Сержант'], [200, 'Старший сержант'],
-  [250, 'Старшина'], [300, 'Старший прапорщик'], [350, 'Младший лейтенант'], [400, 'Лейтенант'],
-  [450, 'Старший лейтенант'], [500, 'Капитан'], [550, 'Майор'], [600, 'Подполковник'], [650, 'Полковник'],
+  [250, 'Старшина'], [300, 'Старший прапорщик'], [350, 'Младший лейтенант'], [400, 'Старший лейтенант'],
+  [450, 'Лейтенант'], [500, 'Капитан'], [550, 'Майор'], [600, 'Подполковник'], [650, 'Полковник'],
   [700, 'Генерал-майор'], [750, 'Генерал-лейтенант'], [800, 'Генерал-полковник'], [850, 'Генерал армии'], [900, 'Маршал'],
 ].map(([min, title]) => ({ min, title }));
 
 export const emptyState = () => ({
   settings: {
     teamName: 'TGT Team', fee: 300, currency: '₽', startBalance: 0, fees: {},
-    ranks: DEFAULT_RANKS, pointsMin: 18, reminderText: '', paymentDetails: '', reminderDays: [1, 22],
+    ranks: DEFAULT_RANKS, pointsMin: 18, veteranPenalty: 50, leaveMaxPerYear: 2, quotaSince: null,
+    reminderText: '', reminderDays: [1, 22],
   },
-  members: [],   // {id, name, callsign, number, group, groupLead, vk, birthday, status:'recruit'|'fighter'|'pause', pauses:[{from,to}], feeFrom, from, left, exempt, pointsBase, admin, login, uid}
+  members: [],   // {id, name, callsign, number, group, groupLead, veteran, leaves:['YYYY-MM'], vk, birthday, status:'recruit'|'fighter'|'pause', pauses:[{from,to}], feeFrom, from, left, exempt, pointsBase, admin, login, uid}
   payments: {},  // {'YYYY-MM': {memberId: amount}}
   expenses: [],  // {id, date, title, amount, category, kind:'out'|'in'}
   events: [],    // {id, date, time, title, place, notes, attendance:{memberId:'yes'|'maybe'|'no'}}
@@ -39,7 +40,7 @@ export function normalizeState(raw) {
 export function normalizeMember(m) {
   const out = {
     status: 'fighter', feeFrom: null, left: null, exempt: false, admin: false, vk: '', birthday: '', callsign: '',
-    number: '', group: '', groupLead: false, pointsBase: 0, pauses: [], ...m,
+    number: '', group: '', groupLead: false, veteran: false, leaves: [], pointsBase: 0, pauses: [], ...m,
   };
   if (!out.vk && m.phone) out.vk = m.phone; // v1: поле «Телефон / Telegram»
   delete out.phone;

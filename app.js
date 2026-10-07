@@ -107,30 +107,88 @@ function treasuryBalance() {
 /* ================= Баллы и звания ================= */
 
 const POINT_CATS = {
-  game: 'Игры', training: 'Походы, тренировки', contribution: 'Вклад в команду',
-  discipline: 'Штраф: дисциплина', safety: 'Штраф: ТБ',
+  game: 'Игры и выезды', logistics: 'Логистика и помощь', media: 'Медиа и контент', tech: 'Технический вклад',
+  initiative: 'Инициативы', training: 'Походы, тренировки', contribution: 'Вклад в команду',
+  discipline: 'Штраф: дисциплина', safety: 'Штраф: ТБ', quota: 'Штраф: норма квартала',
 };
-const PENALTY = new Set(['discipline', 'safety']);
+const PENALTY = new Set(['discipline', 'safety', 'quota']);
+
+/** Пункты Положения о балльной системе: [категория, что сделал, баллы, подсказка диапазона]. */
+const POINT_PRESETS = [
+  ['Игры и выезды', [['game', 'Простая игра', 2], ['game', 'Платная игра', 3], ['game', 'Суточная игра', 10]]],
+  ['Логистика и помощь', [['logistics', 'Подвоз сокомандника на игру', 1], ['logistics', 'Работы на полигоне (уборка, укрепления, ремонт, инструктаж)', 1, 'от 1']]],
+  ['Медиа и контент', [['media', 'Пост в сообществе', 1], ['media', 'Короткий ролик (Reels / Shorts / TikTok)', 1], ['media', 'Фотографии с игры', 1], ['media', 'Видеорепортаж с игры', 3]]],
+  ['Технический вклад', [['tech', 'Электронный девайс для команды', 5, '5–10'], ['tech', 'ПО, бот или приложение для команды', 5, '5–10']]],
+  ['Инициативы', [['initiative', 'Тренировка по тактической медицине', 3, '3–5'], ['initiative', 'Наставничество: новобранец прошёл испытательный срок', 5],
+    ['initiative', 'Судейство / организация мероприятий', 3, '3–7'], ['initiative', 'Рекрутинг: новый игрок закрепился в команде', 5]]],
+  ['Прочее', [['training', 'Поход, тренировка', 3], ['contribution', 'Другой вклад в команду', 1]]],
+  ['Штрафы', [['discipline', 'Дисциплина (опоздание, оскорбление…)', 5], ['safety', 'Нарушение ТБ', 5]]],
+];
+
+/** Типы игр и баллы за участие по умолчанию. */
+const EVENT_KINDS = {
+  game: ['Простая игра', 2], paid: ['Платная игра', 3], daily: ['Суточная игра', 10],
+  training: ['Поход, тренировка', 3], other: ['Другое', 0],
+};
 
 function quarterOf(iso) {
   const [y, m] = iso.split('-').map(Number);
   const q = Math.floor((m - 1) / 3);
   const end = new Date(y, q * 3 + 3, 0);
+  const start = `${y}-${String(q * 3 + 1).padStart(2, '0')}`;
   return {
-    start: `${y}-${String(q * 3 + 1).padStart(2, '0')}-01`,
+    start: `${start}-01`,
     end: `${y}-${String(q * 3 + 3).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`,
+    months: [start, shiftMonth(start, 1), shiftMonth(start, 2)],
     label: `${['I', 'II', 'III', 'IV'][q]} квартал ${y}`,
   };
 }
+const nextQuarter = (q) => quarterOf(`${shiftMonth(q.start.slice(0, 7), 3)}-01`);
+const inLeave = (m, month) => (m.leaves || []).includes(month);
 
-/** Начисления бойца: ручные + автоматические за прошедшие игры с отметкой «еду». */
-function pointEntries(m) {
+/** Начисления: ручные + автоматические за прошедшие игры с отметкой «еду». */
+function baseEntries(m) {
   const today = todayISO();
   const manual = state.points.filter((p) => p.memberId === m.id);
   const auto = state.events
     .filter((e) => e.date < today && e.attendance?.[m.id] === 'yes' && Number(e.points) > 0)
     .map((e) => ({ id: `ev-${e.id}`, date: e.date, cat: e.kind === 'training' ? 'training' : 'game', amount: Number(e.points), note: e.title, auto: true }));
-  return [...manual, ...auto].sort((a, b) => b.date.localeCompare(a.date));
+  return [...manual, ...auto];
+}
+
+/** Баллы в зачёт нормы за квартал: начисления + 18 за каждый месяц академического отпуска. */
+function quotaPoints(m, q, base = baseEntries(m)) {
+  const earned = base.filter((e) => e.date >= q.start && e.date <= q.end && e.cat !== 'quota').reduce((a, e) => a + e.amount, 0);
+  return earned + q.months.filter((k) => inLeave(m, k)).length * (state.settings.pointsMin || 0);
+}
+
+/**
+ * Проверка нормы по завершённым кварталам начиная с settings.quotaSince.
+ * Квартал проверяется, только если боец был в команде все три месяца и не стоял на паузе.
+ */
+function quotaHistory(m, base = baseEntries(m)) {
+  const min = state.settings.pointsMin || 0;
+  const today = todayISO();
+  const out = [];
+  if (!min || !m.from) return out;
+  let q = quarterOf(`${state.settings.quotaSince || today.slice(0, 7)}-01`);
+  for (let guard = 0; q.end < today && guard < 200; guard++, q = nextQuarter(q)) {
+    if (!q.months.every((k) => onDuty(m, k))) continue;
+    const got = quotaPoints(m, q, base);
+    out.push({ q, got, ok: got >= min });
+  }
+  return out;
+}
+
+/** Все начисления бойца, включая штраф −50 «старичку» за каждый квартал без нормы. */
+function pointEntries(m) {
+  const base = baseEntries(m);
+  const penalty = Number(state.settings.veteranPenalty ?? 50);
+  const quota = m.veteran ? quotaHistory(m, base).filter((r) => !r.ok).map((r) => ({
+    id: `q-${r.q.start}`, date: r.q.end, cat: 'quota', amount: -penalty,
+    note: `${r.q.label}: ${pts(r.got)} из ${state.settings.pointsMin}`, auto: true,
+  })) : [];
+  return [...base, ...quota].sort((a, b) => b.date.localeCompare(a.date));
 }
 
 function rankFor(total) {
@@ -145,8 +203,9 @@ function pointsSummary(m) {
   const entries = pointEntries(m);
   const q = quarterOf(todayISO());
   const total = (Number(m.pointsBase) || 0) + entries.reduce((a, e) => a + e.amount, 0);
-  const quarter = entries.filter((e) => e.date >= q.start && e.date <= q.end).reduce((a, e) => a + e.amount, 0);
-  return { total, quarter, q, rank: rankFor(total), entries };
+  const quarter = quotaPoints(m, q, entries);
+  const history = quotaHistory(m, entries);
+  return { total, quarter, q, rank: rankFor(total), entries, history };
 }
 
 /* ================= Посещаемость ================= */
@@ -154,7 +213,7 @@ function pointsSummary(m) {
 /** Прошедшие игры, на которые боец отметил «еду», из всех игр, пока он был в команде. */
 function attendanceStats(m) {
   const today = todayISO();
-  const past = state.events.filter((e) => e.date < today && onDuty(m, e.date.slice(0, 7)));
+  const past = state.events.filter((e) => e.date < today && onDuty(m, e.date.slice(0, 7)) && !inLeave(m, e.date.slice(0, 7)));
   const yes = past.filter((e) => e.attendance?.[m.id] === 'yes').length;
   const no = past.filter((e) => e.attendance?.[m.id] === 'no').length;
   return { yes, no, total: past.length, pct: past.length ? Math.round((yes / past.length) * 100) : null };
@@ -592,7 +651,7 @@ function rosterView() {
     const sub = [m.number, rank, sinceLabel(m.from), m.vk ? `ВК ${vkMention(m.vk)}` : ''].filter(Boolean).map(esc).join(' · ');
     return `<li data-act="openMember" data-id="${m.id}">
       <div class="grow">
-        <div class="name">${esc(displayName(m))}${m.groupLead ? '<span class="chip accent">ком. группы</span>' : ''}${m.admin ? '<span class="chip accent">админ</span>' : ''}${b && b.days <= 7 ? ' <span class="chip">ДР</span>' : ''}</div>
+        <div class="name">${esc(displayName(m))}${m.groupLead ? '<span class="chip accent">ком. группы</span>' : ''}${m.veteran ? '<span class="chip">старичок</span>' : ''}${inLeave(m, now) ? '<span class="chip">отпуск</span>' : ''}${m.admin ? '<span class="chip accent">админ</span>' : ''}${b && b.days <= 7 ? ' <span class="chip">ДР</span>' : ''}</div>
         <div class="sub">${sub}</div>
       </div>
       ${m.left && m.left <= now ? ''
@@ -627,15 +686,26 @@ function ranksView() {
     .sort((a, b) => b.p.total - a.p.total || byName(a.m, b.m));
   if (!rows.length) return '<div class="list empty">Нет бойцов</div>';
   const lastMonthOfQuarter = todayISO().slice(0, 7) === q.end.slice(0, 7);
+  // Итоги последнего завершённого квартала: «старички» получают штраф, остальные — кандидаты на исключение.
+  const prev = quarterOf(`${shiftMonth(q.start.slice(0, 7), -3)}-01`);
+  const failed = rows.map(({ m, p }) => ({ m, r: p.history.find((h) => h.q.start === prev.start) })).filter((x) => x.r && !x.r.ok);
+  const checked = rows.some(({ p }) => p.history.some((h) => h.q.start === prev.start));
+  const quotaCard = !checked ? '' : failed.length ? `<div class="card card-bad">
+      <b>Норма за ${prev.label} не выполнена</b>
+      ${failed.map(({ m, r }) => `<div class="small" style="margin-top:6px">▸ ${esc(shortName(m))} — ${pts(r.got)} из ${min}:
+        ${m.veteran ? `старичок, штраф −${state.settings.veteranPenalty ?? 50}` : '<b>кандидат на исключение</b>'}</div>`).join('')}
+    </div>` : `<div class="card card-ok small">Норма за ${prev.label} выполнена всеми ✓</div>`;
   return `
+    ${quotaCard}
     <div class="small muted" style="margin-bottom:10px">${q.label} · минимум ${min} баллов за квартал.
-      Баллы за игры начисляются сами по отметке «[+] еду» на прошедших играх; вклад и штрафы начисляет админ.</div>
+      Баллы за игры начисляются сами по отметке «[+] еду» на прошедших играх, остальное начисляет админ по Положению.
+      Месяц академического отпуска засчитывается как ${min} баллов.</div>
     <ul class="list">${rows.map(({ m, p }, i) => {
       const next = p.rank.next;
       const pct = next ? Math.max(0, Math.min(100, Math.round(((p.total - p.rank.min) / (next.min - p.rank.min)) * 100))) : 100;
       return `<li data-act="openMember" data-id="${m.id}">
         <div class="rank">#${i + 1}</div>
-        <div class="grow"><div class="name">${esc(shortName(m))}${m.number ? ` <span class="sub">${esc(m.number)}</span>` : ''}</div>
+        <div class="grow"><div class="name">${esc(shortName(m))}${m.number ? ` <span class="sub">${esc(m.number)}</span>` : ''}${m.veteran ? ' <span class="chip">старичок</span>' : ''}${inLeave(m, monthKey()) ? ' <span class="chip">отпуск</span>' : ''}</div>
           <div class="sub" style="color:var(--text)">${esc(p.rank.title)}</div>
           <div class="progress" style="margin:4px 0 2px"><div style="width:${pct}%"></div></div>
           <div class="sub">${next ? `до «${esc(next.title)}» — ${pts(next.min - p.total)}` : 'высшее звание'}</div></div>
@@ -687,6 +757,7 @@ function memberCard(m) {
       <span class="chip ${m.left || paused ? '' : 'ok'}">${status}</span>
       <span class="chip accent">${esc(p.rank.title)}</span>
       ${m.groupLead ? '<span class="chip accent">командир группы</span>' : ''}
+      ${m.veteran ? '<span class="chip">старичок</span>' : ''}
       ${m.admin ? '<span class="chip accent">админ</span>' : ''}
       ${m.exempt ? '<span class="chip">освобождён от взносов</span>' : ''}
     </div>
@@ -702,6 +773,8 @@ function memberCard(m) {
         : `<span class="pos">оплачено</span>${prepaid ? ` · аванс ${money(prepaid)}` : ''}`}</div>
       <div>Баллы</div><div><b>${pts(p.total)}</b>${p.rank.next ? ` · до «${esc(p.rank.next.title)}» ${pts(p.rank.next.min - p.total)}` : ''}</div>
       <div>Квартал</div><div>${pts(p.quarter)}${min ? ` из ${min}` : ''}${min && p.quarter < min ? ' <span class="chip bad">мало</span>' : ''}</div>
+      ${p.history.length ? `<div>Норма</div><div>${p.history.slice(-4).map((h) => `${h.q.label.replace(' квартал ', ' кв. ')}: ${pts(h.got)} ${h.ok ? '✓' : '×'}`).join('<br>')}</div>` : ''}
+      ${(m.leaves || []).length ? `<div>Академ. отпуск</div><div>${m.leaves.map((k) => `${monthLabel(k)}${admin ? ` <a href="#" data-del-leave="${k}">×</a>` : ''}`).join(', ')}</div>` : ''}
       <div>Посещаемость</div><div>${s.pct === null ? 'игр ещё не было' : `<b>${s.pct}%</b> — ${s.yes} из ${s.total} игр`}</div>
     </div>
     ${p.entries.length ? `<h3 style="margin:4px 0 0">Начисления баллов</h3>
@@ -715,10 +788,17 @@ function memberCard(m) {
     <div class="row">
       ${admin && m.status === 'recruit' && !m.left ? '<button class="btn" value="promote">★ Принять в бойцы</button>' : ''}
       ${admin ? '<button class="btn" value="points">+ Баллы</button>' : ''}
+      ${admin && !m.left ? '<button class="btn" value="leave">Отпуск</button>' : ''}
       ${admin ? '<button class="btn" value="edit">Изменить</button>' : ''}
       <button class="btn primary" value="close">Готово</button>
     </div>`, {
     onMount(form) {
+      form.querySelectorAll('[data-del-leave]').forEach((a) => a.addEventListener('click', (e) => {
+        e.preventDefault();
+        if (!confirm(`Отменить академический отпуск за ${monthLabel(a.dataset.delLeave)}?`)) return;
+        run(() => store.saveItem('members', { id: m.id, leaves: (m.leaves || []).filter((k) => k !== a.dataset.delLeave) }), 'Отпуск отменён');
+        form.closest('dialog').close();
+      }));
       form.querySelectorAll('[data-del-point]').forEach((btn) => btn.addEventListener('click', async () => {
         if (!confirm('Удалить начисление?')) return;
         if (await run(() => store.deleteItem('points', btn.dataset.delPoint), 'Удалено')) btn.closest('li').remove();
@@ -727,6 +807,7 @@ function memberCard(m) {
     onSubmit(fd, action) {
       if (action === 'edit') later(() => memberForm(m));
       if (action === 'points') later(() => pointsForm(m));
+      if (action === 'leave') later(() => leaveForm(m));
       if (action === 'promote') later(() => ACTIONS.promote(m.id));
     },
   });
@@ -757,6 +838,7 @@ function memberForm(m) {
     </div>
     <datalist id="groups">${groups.map((g) => `<option>${esc(g)}</option>`).join('')}</datalist>
     <label class="toggle"><input type="checkbox" name="groupLead" ${m.groupLead ? 'checked' : ''}> Командир группы</label>
+    <label class="toggle"><input type="checkbox" name="veteran" ${m.veteran ? 'checked' : ''}> Старичок — не исключается за норму, штраф −${state.settings.veteranPenalty ?? 50} баллов</label>
     <label class="field">Статус<select name="status">
       <option value="fighter" ${m.status === 'fighter' ? 'selected' : ''}>Активен — боец, платит взносы</option>
       <option value="recruit" ${m.status === 'recruit' ? 'selected' : ''}>Рекрут — без взносов</option>
@@ -810,6 +892,7 @@ function memberForm(m) {
         number: fd.get('number').trim().toUpperCase(),
         group: fd.get('group').trim(),
         groupLead: fd.get('groupLead') === 'on',
+        veteran: fd.get('veteran') === 'on',
         vk: fd.get('vk').trim(),
         birthday: fd.get('birthday') || '',
         status,
@@ -828,23 +911,60 @@ function memberForm(m) {
 
 function pointsForm(m) {
   const members = state.members.filter((x) => !x.left || x.left > monthKey()).sort(byName);
+  const presets = POINT_PRESETS.flatMap(([, items]) => items);
   openSheet(`
     <h2>Начислить баллы</h2>
     <label class="field">Боец<select name="memberId" required>${members.map((x) => `<option value="${x.id}" ${m && x.id === m.id ? 'selected' : ''}>${esc(displayName(x))}</option>`).join('')}</select></label>
-    <label class="field">За что<select name="cat">${Object.entries(POINT_CATS).map(([k, v]) => `<option value="${k}">${v}</option>`).join('')}</select></label>
-    <label class="field">Баллы (штрафы вычитаются сами)<input name="amount" type="number" inputmode="decimal" step="any" min="0" required value="3"></label>
+    <label class="field">За что (по Положению)<select name="preset">${POINT_PRESETS.map(([group, items]) => `<optgroup label="${esc(group)}">${items.map(([, title, amount, hint]) => {
+      const i = presets.findIndex((x) => x[1] === title);
+      return `<option value="${i}">${esc(title)} — ${hint || amount}</option>`;
+    }).join('')}</optgroup>`).join('')}</select></label>
+    <label class="field">Баллы <span id="ptsHint"></span><input name="amount" type="number" inputmode="decimal" step="any" min="0" required value="${presets[0][2]}"></label>
     <label class="field">Дата<input name="date" type="date" required value="${todayISO()}"></label>
-    <label class="field">Комментарий<input name="note" placeholder="стройка базы, инструктаж…"></label>
+    <label class="field">Комментарий<input name="note" placeholder="что именно сделал"></label>
     <div class="row">
       <button class="btn" value="cancel" formnovalidate>Отмена</button>
       <button class="btn primary" value="save">Начислить</button>
     </div>`, {
+    onMount(form) {
+      const sync = () => {
+        const [cat, , amount, hint] = presets[Number(form.preset.value)];
+        form.amount.value = amount;
+        $('#ptsHint', form).textContent = PENALTY.has(cat) ? '(вычитаются)' : hint ? `(${hint})` : '';
+      };
+      form.preset.addEventListener('change', sync);
+      sync();
+    },
     onSubmit(fd) {
-      const cat = fd.get('cat');
+      const [cat, title] = presets[Number(fd.get('preset'))];
       const amount = Math.abs(Number(fd.get('amount')) || 0) * (PENALTY.has(cat) ? -1 : 1);
       if (!amount) return false;
-      run(() => store.saveItem('points', { memberId: fd.get('memberId'), cat, amount, date: fd.get('date') || todayISO(), note: fd.get('note').trim() }),
+      const note = [title, fd.get('note').trim()].filter(Boolean).join(': ');
+      run(() => store.saveItem('points', { memberId: fd.get('memberId'), cat, amount, date: fd.get('date') || todayISO(), note }),
         amount > 0 ? `+${pts(amount)} баллов` : `Штраф ${pts(amount)}`);
+    },
+  });
+}
+
+function leaveForm(m) {
+  const max = state.settings.leaveMaxPerYear ?? 2;
+  const next = shiftMonth(monthKey(), 1);
+  const used = (y) => (m.leaves || []).filter((k) => k.startsWith(y)).length;
+  openSheet(`
+    <h2>Академический отпуск: ${esc(shortName(m))}</h2>
+    <p class="small muted" style="margin:0">Отпуск — 1 месяц, не более ${max} в календарном году. В этот месяц штрафы за неактивность
+      не начисляются, в норму квартала засчитывается ${state.settings.pointsMin || 0} баллов.</p>
+    <label class="field">Месяц<input type="month" name="month" required value="${next}"></label>
+    <div class="small muted">Уже взято в ${next.slice(0, 4)}: ${used(next.slice(0, 4))} из ${max}</div>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Оформить</button>
+    </div>`, {
+    onSubmit(fd) {
+      const k = fd.get('month');
+      if ((m.leaves || []).includes(k)) { toast('Этот месяц уже в отпуске'); return false; }
+      if (used(k.slice(0, 4)) >= max) { toast(`В ${k.slice(0, 4)} уже ${max} мес. отпуска — больше нельзя`); return false; }
+      run(() => store.saveItem('members', { id: m.id, leaves: [...(m.leaves || []), k].sort() }), `Отпуск: ${monthLabel(k)}`);
     },
   });
 }
@@ -977,7 +1097,7 @@ function expenseForm(e) {
 
 function eventForm(ev) {
   const isNew = !ev;
-  ev = ev || { date: todayISO(), time: '', title: '', place: '', notes: '', kind: 'game', points: 3 };
+  ev = ev || { date: todayISO(), time: '', title: '', place: '', notes: '', kind: 'game', points: EVENT_KINDS.game[1] };
   openSheet(`
     <h2>${isNew ? 'Новая игра / тренировка' : 'Редактировать'}</h2>
     <label class="field">Название *<input name="title" required value="${esc(ev.title)}" placeholder="Игра «Штурм высоты»" list="evtypes"></label>
@@ -988,11 +1108,8 @@ function eventForm(ev) {
     </div>
     <label class="field">Место<input name="place" value="${esc(ev.place)}" placeholder="Полигон / координаты"></label>
     <div class="row">
-      <label class="field" style="flex:2">Тип<select name="kind">
-        <option value="game" ${ev.kind !== 'training' && ev.kind !== 'other' ? 'selected' : ''}>Игра (полигон, мультиплеер)</option>
-        <option value="training" ${ev.kind === 'training' ? 'selected' : ''}>Поход, тренировка</option>
-        <option value="other" ${ev.kind === 'other' ? 'selected' : ''}>Другое</option>
-      </select></label>
+      <label class="field" style="flex:2">Тип<select name="kind">${Object.entries(EVENT_KINDS).map(([k, [title, p]]) =>
+        `<option value="${k}" ${(ev.kind || 'game') === k ? 'selected' : ''}>${title} — ${p}</option>`).join('')}</select></label>
       <label class="field" style="flex:1">Баллы<input name="points" type="number" inputmode="decimal" step="any" min="0" value="${ev.points ?? 0}"></label>
     </div>
     <label class="field">Заметки<textarea name="notes" placeholder="Сбор в 8:00, взнос за игру, что взять…">${esc(ev.notes)}</textarea></label>
@@ -1001,6 +1118,9 @@ function eventForm(ev) {
       <button class="btn" value="cancel" formnovalidate>Отмена</button>
       <button class="btn primary" value="save">Сохранить</button>
     </div>`, {
+    onMount(form) {
+      form.kind.addEventListener('change', () => { form.points.value = EVENT_KINDS[form.kind.value]?.[1] ?? 0; });
+    },
     onSubmit(fd, action) {
       if (action === 'delete') {
         if (!confirm('Удалить событие?')) return false;
@@ -1099,7 +1219,14 @@ function settingsForm() {
     <label class="field">Остаток казны на начало учёта<input type="number" inputmode="decimal" step="any" name="startBalance" value="${s.startBalance || 0}"></label>
     <label class="field">Текст напоминания о взносах (с реквизитами)<textarea name="reminderText" placeholder="Коллеги, напоминаю про ежемесячные взносы…">${esc(s.reminderText || '')}</textarea></label>
     <label class="field">Дни месяца для напоминания<input name="reminderDays" value="${esc((s.reminderDays || []).join(', '))}" placeholder="1, 22"></label>
-    <label class="field">Минимум баллов за квартал<input type="number" inputmode="numeric" min="0" name="pointsMin" value="${s.pointsMin || 0}"></label>
+    <div class="row">
+      <label class="field" style="flex:1">Норма за квартал<input type="number" inputmode="numeric" min="0" name="pointsMin" value="${s.pointsMin || 0}"></label>
+      <label class="field" style="flex:1">Штраф старичку<input type="number" inputmode="numeric" min="0" name="veteranPenalty" value="${s.veteranPenalty ?? 50}"></label>
+    </div>
+    <div class="row">
+      <label class="field" style="flex:1">Проверять норму с<input type="month" name="quotaSince" value="${s.quotaSince || monthKey()}"></label>
+      <label class="field" style="flex:1">Отпуск, мес./год<input type="number" inputmode="numeric" min="0" name="leaveMaxPerYear" value="${s.leaveMaxPerYear ?? 2}"></label>
+    </div>
     <label class="field">Звания: «баллы звание», по строке на звание<textarea name="ranks" rows="8">${esc(ranks)}</textarea></label>
     <div class="small muted">Изменение взноса не меняет суммы уже начатых месяцев — их можно поправить на экране «Взносы».</div>
     <div class="row">
@@ -1117,6 +1244,9 @@ function settingsForm() {
         reminderText: fd.get('reminderText').trim(),
         reminderDays: fd.get('reminderDays').split(/[^\d]+/).map(Number).filter((d) => d >= 1 && d <= 31),
         pointsMin: Math.max(0, Number(fd.get('pointsMin')) || 0),
+        veteranPenalty: Math.max(0, Number(fd.get('veteranPenalty')) || 0),
+        leaveMaxPerYear: Math.max(0, Number(fd.get('leaveMaxPerYear')) || 0),
+        quotaSince: quarterOf(`${fd.get('quotaSince') || monthKey()}-01`).start.slice(0, 7),
         ranks: parsedRanks.length ? parsedRanks : s.ranks,
       }), 'Сохранено');
     },
