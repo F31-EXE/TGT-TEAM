@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1b1f17">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="TGT Team">
+  <title>TGT Team</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon.svg" alt="" width="28" height="28">
+      <span id="teamName">TGT Team</span>
+    </div>
+    <div class="balance" id="topBalance" title="Баланс казны"></div>
+  </header>
+
+  <main id="view"></main>
+
+  <nav class="tabbar" id="tabbar">
+    <button data-tab="dues" class="active"><span class="ic">💰</span><span>Взносы</span></button>
+    <button data-tab="members"><span class="ic">👥</span><span>Состав</span></button>
+    <button data-tab="treasury"><span class="ic">🧾</span><span>Казна</span></button>
+    <button data-tab="events"><span class="ic">🎯</span><span>Игры</span></button>
+    <button data-tab="more"><span class="ic">⚙️</span><span>Ещё</span></button>
+  </nav>
+
+  <dialog id="sheet"><form method="dialog" id="sheetForm"></form></dialog>
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
