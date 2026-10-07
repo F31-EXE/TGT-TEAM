@@ -149,3 +149,23 @@ label.toggle input { width: 20px; height: 20px; accent-color: var(--accent); }
 .small { font-size: 12px; }
 .pos { color: var(--ok); }
 .neg { color: var(--bad); }
+
+/* v2 */
+body.auth .tabbar, body.auth .balance { display: none; }
+body.auth { padding-bottom: 0; }
+.auth-box { max-width: 380px; margin: 8vh auto 0; text-align: center; display: flex; flex-direction: column; gap: 12px; align-items: stretch; }
+.auth-box img, .auth-box .logo { align-self: center; font-size: 48px; }
+.auth-box h2 { margin: 0; }
+.stack { display: flex; flex-direction: column; gap: 12px; text-align: left; }
+.banner { background: rgba(201,180,88,.12); border: 1px solid rgba(201,180,88,.4); border-radius: var(--radius); padding: 10px 12px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px; }
+.btn.small-btn { min-height: 32px; padding: 0 10px; font-size: 13px; flex: none; }
+.list li.static { cursor: default; }
+.list li.mine { background: rgba(201,180,88,.07); }
+.rank { width: 22px; text-align: center; flex: none; }
+.card-bad { border-color: rgba(226,87,76,.5); }
+.card-ok { border-color: rgba(111,191,90,.5); }
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; font-size: 14px; }
+.kv > div:nth-child(odd) { color: var(--muted); }
+.kv a { color: var(--accent); }
+.att button[disabled] { cursor: default; opacity: .2; }
+.att button[disabled].on { opacity: .8; }

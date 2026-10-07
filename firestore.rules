@@ -1,0 +1,68 @@
+rules_version = '2';
+
+// Правила доступа к общей базе команды.
+// Админ ведёт всё. Боец видит данные команды и может отмечать только СВОЁ участие в играх.
+service cloud.firestore {
+  match /databases/{db}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function userDoc() { return /databases/$(db)/documents/users/$(request.auth.uid); }
+    function isMember() { return signedIn() && exists(userDoc()); }
+    function isAdmin() { return isMember() && get(userDoc()).data.admin == true; }
+    function myMemberId() { return get(userDoc()).data.memberId; }
+
+    // Первый запуск: создаётся одновременно с settings/main, только пока команды ещё нет.
+    function bootstrapping() {
+      return signedIn()
+        && !exists(/databases/$(db)/documents/settings/main)
+        && existsAfter(/databases/$(db)/documents/settings/main);
+    }
+
+    // Логин → технический email. Читается до входа, но только по точному логину.
+    match /logins/{key} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if isAdmin() || bootstrapping();
+    }
+
+    match /users/{uid} {
+      allow get: if signedIn() && uid == request.auth.uid;
+      allow read: if isAdmin();
+      allow write: if isAdmin();
+      allow create: if bootstrapping() && uid == request.auth.uid && request.resource.data.admin == true;
+    }
+
+    match /settings/{doc} {
+      allow read: if isMember();
+      allow write: if isAdmin() || bootstrapping();
+    }
+
+    match /members/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin() || bootstrapping();
+    }
+
+    match /payments/{month} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+
+    match /expenses/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+
+    match /gear/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+
+    match /events/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+      allow update: if isMember()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendance'])
+        && request.resource.data.attendance.diff(resource.data.attendance).affectedKeys().hasOnly([myMemberId()]);
+    }
+  }
+}
