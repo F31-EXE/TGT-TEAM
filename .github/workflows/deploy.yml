@@ -1,0 +1,58 @@
+# Сборка и публикация приложения на GitHub Pages при каждом пуше.
+name: Build & Deploy
+
+on:
+  push:
+    branches: [claude/festive-maxwell-nadb5j, main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Проверка кода
+        run: for f in *.js; do node --check "$f"; done
+
+      - name: Сборка
+        run: |
+          mkdir -p _site
+          cp index.html styles.css manifest.webmanifest *.js _site/
+          cp -r icons vendor _site/
+          # Новая версия кэша при каждой сборке — телефоны сами подтянут обновление.
+          sed -i "s/const CACHE = 'tgt-team-[^']*';/const CACHE = 'tgt-team-${GITHUB_SHA::8}';/" _site/sw.js
+          grep -q "tgt-team-${GITHUB_SHA::8}" _site/sw.js
+          if grep -q "apiKey: ''" _site/firebase-config.js; then
+            echo "::warning::firebase-config.js не заполнен — приложение работает в локальном режиме (без общей базы)"
+          fi
+          du -sh _site
+
+      - uses: actions/configure-pages@v5
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
