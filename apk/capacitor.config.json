@@ -2,11 +2,6 @@
   "appId": "team.tgt.app",
   "appName": "TGT Team",
   "webDir": "www",
-  "server": {
-    "url": "https://f31-exe.github.io/TGT-TEAM/",
-    "cleartext": false,
-    "errorPath": "offline.html"
-  },
   "android": {
     "backgroundColor": "#020802",
     "allowMixedContent": false

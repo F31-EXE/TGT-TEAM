@@ -21,7 +21,11 @@ const money = (n) => {
   return `${txt} ${state.settings.currency}`;
 };
 const pts = (n) => (Math.round(n * 100) / 100).toLocaleString('ru-RU');
-const appUrl = () => location.origin + location.pathname.replace(/index\.html$/, '');
+// Публичные адреса: в Android-приложении свой адрес (localhost) отправлять бойцам нельзя.
+const SITE_URL = 'https://f31-exe.github.io/TGT-TEAM/';
+const APK_URL = 'https://github.com/F31-EXE/TGT-TEAM/releases/latest/download/tgt-team.apk';
+const isNativeApp = () => !!window.Capacitor?.isNativePlatform?.();
+const appUrl = () => (isNativeApp() ? SITE_URL : location.origin + location.pathname.replace(/index\.html$/, ''));
 
 const displayName = (m) => {
   if (!m) return '—';
@@ -1068,7 +1072,7 @@ function accessForm(m) {
       const self = m.id === me.memberId;
       run(async () => {
         await store.grantAccess(m, login, newPin, fd.get('admin') === 'on');
-        const text = `Доступ в приложение команды ${state.settings.teamName}\n${appUrl()}\nЛогин: ${login}\nPIN: ${newPin}\n\nОткройте ссылку и добавьте приложение на главный экран.`;
+        const text = `Доступ в приложение команды ${state.settings.teamName}\n${appUrl()}\nЛогин: ${login}\nPIN: ${newPin}\n\nОткройте ссылку и добавьте приложение на главный экран.\nAndroid-приложение: ${APK_URL}`;
         openSheet(`
           <h2>Доступ выдан</h2>
           <div class="card" style="margin:0;white-space:pre-wrap">${esc(text)}</div>
@@ -1992,9 +1996,36 @@ store.start((m) => {
   $('#view').innerHTML = `<div class="auth-box"><h2>Ошибка запуска</h2><p class="muted">${esc(errorText(e))}</p></div>`;
 });
 
-if ('serviceWorker' in navigator && location.protocol !== 'file:' && !new URLSearchParams(location.search).has('emu')) {
+// В Android-приложении файлы лежат внутри APK — кэш service worker там только мешал бы обновлениям.
+if ('serviceWorker' in navigator && location.protocol !== 'file:' && !isNativeApp() && !new URLSearchParams(location.search).has('emu')) {
   navigator.serviceWorker.register('sw.js').catch(() => {});
 }
+
+/** Android-приложение: раз в 12 часов сверяет свою сборку с последним релизом на GitHub. */
+async function checkAppUpdate() {
+  if (!isNativeApp()) return;
+  try {
+    const last = Number(localStorage.getItem('tgt-update-check') || 0);
+    if (Date.now() - last < 12 * 3600e3) return;
+    localStorage.setItem('tgt-update-check', String(Date.now()));
+  } catch (e) { /* проверяем без запоминания */ }
+  try {
+    const mine = (await (await fetch('version.json', { cache: 'no-store' })).json()).build;
+    const rel = await (await fetch('https://api.github.com/repos/F31-EXE/TGT-TEAM/releases/latest')).json();
+    const latest = Number(String(rel.tag_name || '').replace(/\D/g, ''));
+    if (!latest || latest <= mine) return;
+    openSheet(`
+      <h2>Доступна новая версия</h2>
+      <p class="muted" style="margin:0">Установлена 1.${mine}, вышла 1.${latest}. Скачайте APK и установите поверх — данные сохранятся.</p>
+      <div class="row">
+        <button class="btn" value="cancel" formnovalidate>Позже</button>
+        <button class="btn primary" value="get">Скачать</button>
+      </div>`, {
+      onSubmit(fd, action) { if (action === 'get') location.href = APK_URL; },
+    });
+  } catch (e) { /* нет сети — проверим в следующий раз */ }
+}
+setTimeout(checkAppUpdate, 4000);
 
 // Для отладки из консоли.
 window.__tgt = { store, get state() { return state; }, get me() { return me; }, duesReport, debtorsReport, attendanceStats, pointsSummary };

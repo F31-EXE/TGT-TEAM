@@ -1,14 +1,27 @@
-# Сборка Android-приложения (APK) и публикация в Releases.
+# Сборка Android-приложения (релизный APK) и публикация в Releases.
+# Веб-приложение упаковывается внутрь APK, поэтому сборка запускается и при изменениях сайта.
 name: Android APK
 
 on:
   push:
     branches: [claude/festive-maxwell-nadb5j, main]
-    paths: ['apk/**', '.github/workflows/apk.yml']
+    paths:
+      - 'apk/**'
+      - '*.js'
+      - '*.html'
+      - '*.css'
+      - 'manifest.webmanifest'
+      - 'icons/**'
+      - 'vendor/**'
+      - '.github/workflows/apk.yml'
   workflow_dispatch:
 
 permissions:
   contents: write
+
+concurrency:
+  group: apk
+  cancel-in-progress: false
 
 jobs:
   apk:
@@ -16,6 +29,10 @@ jobs:
     defaults:
       run:
         working-directory: apk
+    env:
+      APP_VERSION_CODE: ${{ github.run_number }}
+      KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+      KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,36 +52,51 @@ jobs:
       - name: Android SDK
         run: |
           SDKM=$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager | sort -V | tail -1)
-          echo "sdkmanager: $SDKM"
           yes | "$SDKM" --licenses > /dev/null || true
           "$SDKM" --install "platforms;android-36" "build-tools;36.0.0" > /dev/null
 
-      - name: Зависимости и синхронизация Capacitor
+      - name: Веб-приложение внутрь APK
         run: |
+          for f in ../*.js; do node --check "$f"; done
           npm ci
+          scripts/build-web.sh "$APP_VERSION_CODE"
           npx cap sync android
+
+      - name: Ключ подписи
+        run: |
+          if [ -n "$KEYSTORE_B64" ] && [ -n "$KEYSTORE_PASSWORD" ]; then
+            echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+            echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+            echo "SIGNING=release" >> "$GITHUB_ENV"
+          else
+            echo "::warning::Нет секретов ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD — APK подписан временным ключом"
+            echo "SIGNING=debug" >> "$GITHUB_ENV"
+          fi
 
       - name: Сборка APK
         working-directory: apk/android
         run: |
           chmod +x gradlew
-          ./gradlew --no-daemon assembleDebug
+          ./gradlew --no-daemon assembleRelease
           mkdir -p ../out
-          cp app/build/outputs/apk/debug/app-debug.apk ../out/tgt-team.apk
+          cp app/build/outputs/apk/release/app-release.apk ../out/tgt-team.apk
+          "$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner" verify --print-certs ../out/tgt-team.apk | head -3
           ls -la ../out
 
       - uses: actions/upload-artifact@v4
         with:
-          name: tgt-team-apk
+          name: tgt-team-apk-${{ github.run_number }}
           path: apk/out/tgt-team.apk
 
       - name: Публикация в Releases
         uses: softprops/action-gh-release@v2
         with:
           tag_name: apk-${{ github.run_number }}
-          name: TGT Team для Android (сборка ${{ github.run_number }})
+          name: TGT Team для Android 1.${{ github.run_number }}${{ env.SIGNING == 'debug' && ' (временная подпись)' || '' }}
           make_latest: true
           files: apk/out/tgt-team.apk
           body: |
-            Установка: скачайте `tgt-team.apk` на телефон и откройте. Android попросит разрешить установку из этого источника.
-            Приложение загружает актуальную версию с https://f31-exe.github.io/TGT-TEAM/ — обновлять APK нужно редко.
+            Версия 1.${{ github.run_number }}. Приложение целиком внутри APK и работает без сайта.
+            Установка: скачайте `tgt-team.apk` на телефон и откройте; новые версии ставятся поверх старых.
+            Приложение само сообщает о выходе новой версии.
