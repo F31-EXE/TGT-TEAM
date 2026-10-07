@@ -194,7 +194,7 @@ function render() {
   if (me === undefined) { view.innerHTML = '<div class="auth-box muted">Загрузка…</div>'; return; }
   if (cloudConfigured && !me) { view.innerHTML = loginView(); bindLogin(); return; }
   if (me?.noAccess) {
-    view.innerHTML = `<div class="auth-box"><div class="logo">⛔</div><h2>Нет доступа</h2>
+    view.innerHTML = `<div class="auth-box"><div class="logo">×</div><h2>Нет доступа</h2>
       <p class="muted">${esc(me.error || 'Ваш доступ закрыт или ещё не выдан. Обратитесь к администратору команды.')}</p>
       <button class="btn block" id="logoutBtn">Выйти</button></div>`;
     $('#logoutBtn').onclick = () => store.logout();
@@ -318,8 +318,8 @@ const VIEWS = {
           ${paidAmount(m.id, month) ? `<div class="amt pos">${money(paidAmount(m.id, month))}</div>` : ''}
         </li>`).join('')}</ul>` : ''}
       <div class="row" style="margin-top:12px">
-        <button class="btn" data-act="shareDues">📣 Отчёт в ВК</button>
-        ${admin ? '<button class="btn" data-act="remindDebtors">⏰ Должникам</button>' : ''}
+        <button class="btn" data-act="shareDues">» Отчёт в ВК</button>
+        ${admin ? '<button class="btn" data-act="remindDebtors">! Должникам</button>' : ''}
       </div>`;
   },
 
@@ -379,7 +379,7 @@ const VIEWS = {
       for (const v of Object.values(e.attendance || {})) if (v in c) c[v]++;
       return c;
     };
-    const myMark = (e) => ({ yes: '✅ еду', maybe: '❓ думаю', no: '❌ не еду' }[e.attendance?.[me?.memberId]] || '');
+    const myMark = (e) => ({ yes: '[+] еду', maybe: '[?] думаю', no: '[×] не еду' }[e.attendance?.[me?.memberId]] || '');
     return `
       <div class="seg">
         <button class="${upcoming ? 'active' : ''}" data-act="eventsFilter" data-id="upcoming">Предстоящие</button>
@@ -392,7 +392,7 @@ const VIEWS = {
           <div class="grow"><div class="name">${esc(e.title)}</div>
           <div class="sub">${dateLabel(e.date)}${e.time ? `, ${esc(e.time)}` : ''}${e.place ? ` · ${esc(e.place)}` : ''}</div>
           ${me?.memberId ? `<div class="sub">${mark ? `Вы: ${mark}` : upcoming ? '<span class="chip accent">отметьтесь</span>' : ''}</div>` : ''}</div>
-          <div class="small" style="text-align:right">✅ ${c.yes}<br><span class="muted">❓ ${c.maybe} ❌ ${c.no}</span></div>
+          <div class="small" style="text-align:right">+${c.yes}<br><span class="muted">?${c.maybe} ×${c.no}</span></div>
         </li>`;
       }).join('')}</ul>` : `<div class="list empty">${upcoming ? 'Нет запланированных игр и тренировок.' : 'Здесь появятся прошедшие игры.'}</div>`}
       ${isAdmin() ? '<button class="fab" data-act="addEvent" aria-label="Добавить игру">+</button>' : ''}`;
@@ -410,15 +410,15 @@ const VIEWS = {
         <b>${esc(self ? displayName(self) : '—')}</b> <span class="chip ${admin ? 'accent' : ''}">${admin ? 'админ' : 'участник'}</span></div>
         <button class="btn" style="flex:none" data-act="logout">Выйти</button></div>` : ''}
 
-      <h3>🎂 Дни рождения</h3>
+      <h3>Дни рождения</h3>
       ${bdays.length ? `<ul class="list">${bdays.map(({ m, b }) => `
         <li data-act="openMember" data-id="${m.id}"><div class="grow"><div class="name">${esc(displayName(m))}</div>
         <div class="sub">${dayMonthLabel(m.birthday)} · исполнится ${b.age} ${yearsWord(b.age)}</div></div>
         <span class="chip ${b.days <= 7 ? 'accent' : ''}">${whenText(b.days)}</span></li>`).join('')}</ul>
-        <button class="btn block" style="margin-top:8px" data-act="exportIcs">📅 Добавить все ДР в календарь телефона</button>`
+        <button class="btn block" style="margin-top:8px" data-act="exportIcs">+ Добавить все ДР в календарь телефона</button>`
         : `<div class="list empty">Укажите даты рождения в карточках бойцов — приложение напомнит заранее.</div>`}
 
-      <h3>🎒 Командное имущество</h3>
+      <h3>Командное имущество</h3>
       ${gear.length ? `<ul class="list">${gear.map((g) => `
         <li ${admin ? `data-act="editGear" data-id="${g.id}"` : 'class="static"'}>
           <div class="grow"><div class="name">${esc(g.name)}${g.qty > 1 ? ` <span class="chip">×${g.qty}</span>` : ''}</div>
@@ -426,7 +426,7 @@ const VIEWS = {
         </li>`).join('')}</ul>` : '<div class="list empty">Рации, палатки, флаги, аптечки — учитывайте, у кого что на руках.</div>'}
       ${admin ? '<button class="btn block" style="margin-top:8px" data-act="addGear">+ Добавить имущество</button>' : ''}
 
-      <h3>📊 Excel</h3>
+      <h3>Excel</h3>
       <div class="card">
         <p class="small muted" style="margin-top:0">Выгрузка всех данных в таблицу: состав, взносы по месяцам, казна, игры, посещаемость.
         ${admin ? 'Импорт понимает ваши таблицы: список бойцов, взносы «боец × месяцы» (суммы или «+»), операции казны.' : ''}</p>
@@ -436,7 +436,7 @@ const VIEWS = {
         </div>
       </div>
 
-      ${admin ? `<h3>⚙️ Администрирование</h3>
+      ${admin ? `<h3>Администрирование</h3>
       <div class="card">
         <div class="row"><button class="btn" data-act="editSettings">Команда и взнос</button></div>
         <p class="small muted">Резервная копия (JSON)${cloudConfigured ? ' — перенос данных с телефона в общую базу' : ''}:</p>
@@ -446,7 +446,7 @@ const VIEWS = {
         </div>
         ${!cloudConfigured ? '<div class="row" style="margin-top:8px"><button class="btn danger" data-act="resetData">Стереть всё</button></div>' : ''}
       </div>` : ''}
-      ${!cloudConfigured ? '<p class="small muted">⚠️ Локальный режим: данные только на этом телефоне. Общая база подключается по инструкции в README.</p>' : ''}
+      ${!cloudConfigured ? '<p class="small muted">! Локальный режим: данные только на этом телефоне. Общая база подключается по инструкции в README.</p>' : ''}
       <p class="small muted" style="text-align:center">TGT Team · v2.0</p>`;
   },
 };
@@ -456,7 +456,7 @@ function birthdayBanner() {
   if (!list.length) return '';
   return `<div class="banner">${list.map(({ m, b }) => `
     <div class="row" style="align-items:center;flex-wrap:nowrap">
-      <div style="flex:1">🎂 <b>${esc(shortName(m))}</b> — ${b.days === 0 ? `сегодня ДР, ${b.age} ${yearsWord(b.age)}!` : `ДР ${whenText(b.days)} (${dayMonthLabel(m.birthday)})`}</div>
+      <div style="flex:1">▸ <b>${esc(shortName(m))}</b> — ${b.days === 0 ? `сегодня ДР, ${b.age} ${yearsWord(b.age)}!` : `ДР ${whenText(b.days)} (${dayMonthLabel(m.birthday)})`}</div>
       ${b.days <= 1 ? `<button class="btn small-btn" data-act="congrats" data-id="${m.id}">Поздравить</button>` : ''}
     </div>`).join('')}</div>`;
 }
@@ -468,7 +468,7 @@ function myStatusCard() {
   const { debt, debtMonths } = memberDebt(m);
   return `<div class="card ${debt ? 'card-bad' : 'card-ok'}">
     ${debt ? `<b>Ваш долг: ${money(debt)}</b><div class="small muted">${debtMonths.map(monthLabel).join(', ')}</div>`
-      : '<b>Все взносы оплачены 💪</b>'}
+      : '<b>Все взносы оплачены</b>'}
   </div>`;
 }
 
@@ -484,11 +484,11 @@ function rosterView() {
     const b = nextBirthday(m);
     return `<li data-act="openMember" data-id="${m.id}">
       <div class="grow">
-        <div class="name">${esc(displayName(m))}${m.admin ? '<span class="chip accent">админ</span>' : ''}${b && b.days <= 7 ? ' 🎂' : ''}</div>
+        <div class="name">${esc(displayName(m))}${m.admin ? '<span class="chip accent">админ</span>' : ''}${b && b.days <= 7 ? ' <span class="chip">ДР</span>' : ''}</div>
         <div class="sub">${sinceLabel(m.from)}${m.vk ? ` · ВК ${esc(vkMention(m.vk))}` : ''}${m.exempt ? ' · освобождён' : ''}</div>
       </div>
       ${m.status === 'recruit'
-        ? (admin && !m.left ? `<button class="btn small-btn" data-act="promote" data-id="${m.id}">⭐ В бойцы</button>` : '<span class="chip accent">рекрут</span>')
+        ? (admin && !m.left ? `<button class="btn small-btn" data-act="promote" data-id="${m.id}">★ В бойцы</button>` : '<span class="chip accent">рекрут</span>')
         : debt > 0 ? `<span class="chip bad">−${money(debt)}</span>` : '<span class="chip ok">ок</span>'}
     </li>`;
   };
@@ -506,7 +506,7 @@ function attendanceView() {
     .map((m) => ({ m, s: attendanceStats(m) }))
     .sort((a, b) => (b.s.pct ?? -1) - (a.s.pct ?? -1) || b.s.yes - a.s.yes || byName(a.m, b.m));
   const totalPast = state.events.filter((e) => e.date < todayISO()).length;
-  if (!totalPast) return '<div class="list empty">Статистика появится после первых прошедших игр. Посещение считается по отметкам «✅ еду».</div>';
+  if (!totalPast) return '<div class="list empty">Статистика появится после первых прошедших игр. Посещение считается по отметкам «[+] еду».</div>';
   const withPct = rows.filter((r) => r.s.pct !== null);
   const avg = withPct.length ? Math.round(withPct.reduce((a, r) => a + r.s.pct, 0) / withPct.length) : 0;
   return `
@@ -516,12 +516,12 @@ function attendanceView() {
     </div>
     <ul class="list">${rows.map(({ m, s }, i) => `
       <li data-act="openMember" data-id="${m.id}">
-        <div class="rank">${s.pct !== null && i < 3 && s.yes ? ['🥇', '🥈', '🥉'][i] : ''}</div>
+        <div class="rank">${s.pct !== null && i < 3 && s.yes ? `#${i + 1}` : ''}</div>
         <div class="grow"><div class="name">${esc(shortName(m))}${m.status === 'recruit' ? '<span class="chip accent">рекрут</span>' : ''}</div>
           <div class="progress" style="margin:6px 0 0"><div style="width:${s.pct ?? 0}%"></div></div></div>
         <div class="amt" style="text-align:right">${s.pct === null ? '—' : `${s.pct}%`}<div class="sub">${s.yes} из ${s.total}</div></div>
       </li>`).join('')}</ul>
-    <p class="small muted">Посещение считается по отметке «✅ еду» на прошедших играх. Админ может поправить отметки задним числом.</p>`;
+    <p class="small muted">Посещение считается по отметке «[+] еду» на прошедших играх. Админ может поправить отметки задним числом.</p>`;
 }
 
 /* ================= Карточки и формы ================= */
@@ -551,8 +551,8 @@ function memberCard(m) {
     </div>
     ${lastGames.length ? `<div class="small muted">Последние игры: ${lastGames.map((e) => `${esc(e.title)} (${dayMonthLabel(e.date)})`).join(', ')}</div>` : ''}
     <div class="row">
-      ${admin && m.status === 'recruit' && !m.left ? '<button class="btn" value="promote">⭐ Принять в бойцы</button>' : ''}
-      ${admin ? '<button class="btn" value="edit">✏️ Изменить</button>' : ''}
+      ${admin && m.status === 'recruit' && !m.left ? '<button class="btn" value="promote">★ Принять в бойцы</button>' : ''}
+      ${admin ? '<button class="btn" value="edit">Изменить</button>' : ''}
       <button class="btn primary" value="close">Готово</button>
     </div>`, {
     onSubmit(fd, action) {
@@ -574,7 +574,7 @@ function memberForm(m) {
           <button class="btn" value="toggleAdmin" formnovalidate>${m.admin ? 'Снять админа' : 'Сделать админом'}</button>
           <button class="btn danger" value="revoke" formnovalidate>Закрыть доступ</button>
         </div>`
-        : '<div class="row" style="margin-top:8px"><button class="btn" value="access" formnovalidate>🔑 Выдать логин и PIN</button></div>'}
+        : '<div class="row" style="margin-top:8px"><button class="btn" value="access" formnovalidate>» Выдать логин и PIN</button></div>'}
     </div>` : '';
   openSheet(`
     <h2>${isNew ? 'Новый участник' : 'Редактировать'}</h2>
@@ -640,7 +640,7 @@ function memberForm(m) {
 function accessForm(m) {
   const pin = randomPin();
   openSheet(`
-    <h2>🔑 Доступ: ${esc(shortName(m))}</h2>
+    <h2>Доступ: ${esc(shortName(m))}</h2>
     <label class="field">Логин<input name="login" required autocapitalize="none" value="${esc(m.login || m.callsign || m.name)}"></label>
     <label class="field">PIN-код (6+ цифр)<input name="pin" required inputmode="numeric" pattern="\\d{6,}" value="${pin}"></label>
     <label class="toggle"><input type="checkbox" name="admin" ${m.admin ? 'checked' : ''}> Администратор (ведёт учёт)</label>
@@ -660,7 +660,7 @@ function accessForm(m) {
           <h2>Доступ выдан</h2>
           <div class="card" style="margin:0;white-space:pre-wrap">${esc(text)}</div>
           <p class="small muted" style="margin:0">Отправьте это бойцу в личные сообщения ВК. PIN больше нигде не показывается.</p>
-          <div class="row"><button type="button" class="btn" id="sendCreds">📤 Отправить</button><button class="btn primary" value="close">Готово</button></div>`, {
+          <div class="row"><button type="button" class="btn" id="sendCreds">» Отправить</button><button class="btn primary" value="close">Готово</button></div>`, {
           onMount(f) { $('#sendCreds', f).onclick = () => shareText(text); },
           onSubmit() { if (self) store.logout(); },
         });
@@ -798,7 +798,7 @@ function eventCard(ev) {
     const editable = canEdit(m.id);
     return `<li class="static${m.id === me?.memberId ? ' mine' : ''}"><div class="grow"><div class="name">${esc(shortName(m))}${m.id === me?.memberId ? ' <span class="chip accent">вы</span>' : ''}</div></div>
       <div class="att" data-mid="${m.id}">${['yes', 'maybe', 'no'].map((k) => `
-        <button type="button" data-v="${k}" class="${v === k ? 'on' : ''}" ${editable ? '' : 'disabled'}>${{ yes: '✅', maybe: '❓', no: '❌' }[k]}</button>`).join('')}
+        <button type="button" data-v="${k}" class="${v === k ? 'on' : ''}" ${editable ? '' : 'disabled'}>${{ yes: '+', maybe: '?', no: '×' }[k]}</button>`).join('')}
       </div></li>`;
   }).join('');
   openSheet(`
@@ -808,7 +808,7 @@ function eventCard(ev) {
     <h3 style="margin:4px 0 0">Кто едет</h3>
     ${members.length ? `<ul class="list">${rows}</ul>` : '<div class="muted">Нет участников</div>'}
     <div class="row">
-      <button type="button" class="btn" id="shareEvent">📣 В ВК</button>
+      <button type="button" class="btn" id="shareEvent">» В ВК</button>
       ${admin ? '<button class="btn" value="edit" formnovalidate>Изменить</button>' : ''}
       <button class="btn primary" value="close">Готово</button>
     </div>`, {
@@ -955,7 +955,7 @@ const ACTIONS = {
   shareDues() { shareText(duesReport(ui.month)); },
   remindDebtors() {
     const text = debtorsReport();
-    if (!text) return toast('Должников нет 💪');
+    if (!text) return toast('Должников нет');
     shareText(text);
   },
   congrats(id) {
@@ -969,7 +969,7 @@ const ACTIONS = {
   promote(id) {
     const m = memberById(id);
     if (!confirm(`Принять ${shortName(m)} в бойцы? Взносы начнут начисляться с месяца: ${monthLabel(monthKey())}.`)) return;
-    run(() => store.saveItem('members', { id: m.id, status: 'fighter', feeFrom: monthKey() }), `⭐ ${shortName(m)} теперь боец`);
+    run(() => store.saveItem('members', { id: m.id, status: 'fighter', feeFrom: monthKey() }), `★ ${shortName(m)} теперь боец`);
   },
   addExpense() { expenseForm(); },
   editExpense(id) { expenseForm(state.expenses.find((e) => e.id === id)); },

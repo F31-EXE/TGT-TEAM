@@ -1,8 +1,11 @@
 // Офлайн-кэш приложения. При изменении файлов увеличьте версию.
-const CACHE = 'tgt-team-v2';
+const CACHE = 'tgt-team-v3';
 const ASSETS = [
   './', 'index.html', 'styles.css', 'app.js', 'store.js', 'util.js', 'excel.js', 'firebase-config.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',
+  'vendor/fonts/ibm-plex-mono-cyrillic-400-normal.woff2', 'vendor/fonts/ibm-plex-mono-latin-400-normal.woff2',
+  'vendor/fonts/ibm-plex-mono-cyrillic-600-normal.woff2', 'vendor/fonts/ibm-plex-mono-latin-600-normal.woff2',
+  'vendor/fonts/ibm-plex-mono-cyrillic-700-normal.woff2', 'vendor/fonts/ibm-plex-mono-latin-700-normal.woff2',
   'vendor/firebase/firebase-app.js', 'vendor/firebase/firebase-auth.js', 'vendor/firebase/firebase-firestore.js',
 ];
 
