@@ -253,3 +253,9 @@ img.receipt.big { max-height: 70dvh; display: block; margin: 0 auto; filter: non
 .regulation li { padding-left: 16px; position: relative; margin: 3px 0; }
 .regulation li::before { content: "-"; position: absolute; left: 2px; color: var(--muted); }
 .regulation b { background: var(--surface-2); padding: 0 3px; }
+
+/* Командиры групп — янтарным, как подсветка на Pip-Boy */
+:root { --lead: #ffc23d; }
+.lead { color: var(--lead); text-shadow: 0 0 6px rgba(255, 194, 61, .55); }
+.chip.lead-chip { border-color: var(--lead); color: var(--lead); }
+.rank-title { color: var(--text); opacity: .85; }

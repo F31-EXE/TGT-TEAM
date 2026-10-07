@@ -38,6 +38,17 @@ const byName = (a, b) => shortName(a).localeCompare(shortName(b), 'ru');
 const myMember = () => (me?.memberId ? memberById(me.memberId) : null);
 const STATUS_LABEL = { fighter: 'боец', recruit: 'рекрут', pause: 'пауза' };
 
+/** Порядок групп — как в таблице команды; можно поменять в настройках. */
+const DEFAULT_GROUP_ORDER = ['Группа управления', 'Группа разведки', 'Передовая группа', 'Группа огневой поддержки'];
+const groupIndex = (g) => {
+  const order = (state.settings.groupOrder?.length ? state.settings.groupOrder : DEFAULT_GROUP_ORDER).map(normLogin);
+  const i = order.indexOf(normLogin(g));
+  return i < 0 ? 100 : i;
+};
+const byGroup = (a, b) => (!a) - (!b) || groupIndex(a) - groupIndex(b) || a.localeCompare(b, 'ru');
+/** Имя бойца; командир группы выделен цветом. */
+const nameHtml = (m, text = displayName(m)) => `<span class="${m.groupLead ? 'lead' : ''}">${esc(text)}</span>`;
+
 /* ================= Финансы ================= */
 
 const feeFor = (month) => state.settings.fees?.[month] ?? state.settings.fee;
@@ -55,7 +66,7 @@ const expectedFor = (m, month) => (isActiveIn(m, month) && paysIn(m, month) ? fe
  * в следующие месяцы («внёс 900 — три месяца не спрашивать»).
  * statuses[month]: 'paid' | 'advance' (закрыт авансом) | 'partial' | 'unpaid' | ''.
  */
-function ledger(m, untilMonth = monthKey()) {
+function ledger(m, untilMonth = monthKey(), withFuture = true) {
   const statuses = {};
   const owed = []; // [{k, amt}] — недоплаты по месяцам, старые первыми
   let surplus = 0;
@@ -82,7 +93,7 @@ function ledger(m, untilMonth = monthKey()) {
     surplus = 0;
   }
   // Оплаты, записанные в будущие месяцы, тоже уменьшают долг.
-  for (const [k, mo] of Object.entries(state.payments)) if (k > untilMonth && mo[m.id]) settle(mo[m.id]);
+  if (withFuture) for (const [k, mo] of Object.entries(state.payments)) if (k > untilMonth && mo[m.id]) settle(mo[m.id]);
   return { statuses, debt: owed.reduce((a, d) => a + d.amt, 0), prepaid: surplus, debtMonths: owed.map((d) => d.k) };
 }
 const memberDebt = (m, untilMonth) => ledger(m, untilMonth);
@@ -459,23 +470,29 @@ const VIEWS = {
     const pct = s.expected ? Math.min(100, Math.round((s.collected / s.expected) * 100)) : 0;
     const admin = isAdmin();
 
+    const totals = new Map(s.members.map((m) => [m.id, pointsSummary(m)]));
+    const byRank = (a, b) => totals.get(b.id).total - totals.get(a.id).total || byName(a, b);
+    s.payers.sort(byRank);
+    s.free.sort(byRank);
     const row = (m) => {
       const exp = expectedFor(m, month);
       const got = paidAmount(m.id, month);
       const st = ledger(m, month).statuses[month];
       const cls = st === 'paid' || st === 'advance' ? 'paid' : st === 'partial' ? 'partial' : '';
       const mark = st === 'paid' ? '✓' : st === 'advance' ? '»' : st === 'partial' ? '½' : '';
-      const { debt, prepaid } = ledger(m);
+      // Долг и остаток аванса — на конец просматриваемого месяца.
+      const { debt, prepaid } = ledger(m, month, false);
       const sub = [
-        st === 'advance' ? '<span class="chip">авансом</span>' : '',
+        `<span class="rank-title">${esc(totals.get(m.id).rank.title)}</span>`,
+        st === 'advance' ? `<span class="chip">авансом${prepaid > 0 ? ` · ост. ${money(prepaid)}` : ''}</span>` : '',
         st === 'partial' && got ? `<span class="chip">внёс ${money(got)} из ${money(exp)}</span>` : '',
-        debt > 0 ? `<span class="chip bad">долг ${money(debt)}</span>` : prepaid > 0 ? `<span class="chip ok">аванс +${money(prepaid)}</span>` : '',
-      ].join('');
+        debt > 0 ? `<span class="chip bad">долг ${money(debt)}</span>` : prepaid > 0 && st !== 'advance' ? `<span class="chip ok">аванс +${money(prepaid)}</span>` : '',
+      ].join(' ');
       const mine = m.id === me?.memberId ? ' mine' : '';
       return `<li class="${mine}" data-act="${admin ? 'editPayment' : 'openMember'}" data-id="${m.id}">
         ${admin ? `<button type="button" class="check ${cls}" data-act="togglePaid" data-id="${m.id}" aria-label="Отметить оплату">${mark}</button>`
           : `<span class="check ${cls}">${mark}</span>`}
-        <div class="grow"><div class="name">${esc(displayName(m))}</div><div class="sub">${sub}</div></div>
+        <div class="grow"><div class="name">${nameHtml(m)}</div><div class="sub">${sub}</div></div>
         <div class="amt ${got ? 'pos' : 'muted'}">${got ? money(got) : '—'}</div>
       </li>`;
     };
@@ -505,7 +522,7 @@ const VIEWS = {
         : `<div class="list empty">В этом месяце нет плательщиков.${admin ? '<br><br><button class="btn primary" data-act="addMember">Добавить бойца</button>' : ''}</div>`}
       ${s.free.length ? `<h3>Без взноса · ${s.free.length}</h3><ul class="list">${s.free.map((m) => `
         <li data-act="openMember" data-id="${m.id}">
-          <div class="grow"><div class="name">${esc(displayName(m))}</div></div>
+          <div class="grow"><div class="name">${nameHtml(m)}</div><div class="sub">${esc(totals.get(m.id).rank.title)}</div></div>
           <span class="chip ${m.status === 'recruit' ? 'accent' : ''}">${m.status === 'recruit' ? 'рекрут' : inPause(m, month) ? 'пауза' : 'освобождён'}</span>
           ${paidAmount(m.id, month) ? `<div class="amt pos">${money(paidAmount(m.id, month))}</div>` : ''}
         </li>`).join('')}</ul>` : ''}
@@ -618,10 +635,6 @@ const VIEWS = {
 
       <button class="btn block" data-act="openRegulation">▸ Положение о балльной системе</button>
 
-      <h3>Хрон-журнал</h3>
-      ${chronoView()}
-      <button class="btn block" style="margin-top:8px" data-act="addChrono">+ Замер на хроне</button>
-
       <h3>Дни рождения</h3>
       ${bdays.length ? `<ul class="list">${bdays.map(({ m, b }) => `
         <li data-act="openMember" data-id="${m.id}"><div class="grow"><div class="name">${esc(displayName(m))}</div>
@@ -674,21 +687,6 @@ function birthdayBanner() {
     </div>`).join('')}</div>`;
 }
 
-/** Последний замер каждого бойца. */
-function chronoView() {
-  const latest = new Map();
-  for (const c of [...state.chrono].sort((a, b) => a.date.localeCompare(b.date))) latest.set(`${c.memberId}|${normLogin(c.gun)}`, c);
-  const list = [...latest.values()].filter((c) => memberById(c.memberId)).sort((a, b) => byName(memberById(a.memberId), memberById(b.memberId)));
-  if (!list.length) return '<div class="list empty">Скорость привода и энергия — для допуска на полигон.</div>';
-  return `<ul class="list">${list.map((c) => {
-    const canEdit = isAdmin() || c.memberId === me?.memberId;
-    return `<li ${canEdit ? `data-act="editChrono" data-id="${c.id}"` : 'class="static"'}><div class="grow">
-      <div class="name">${esc(shortName(memberById(c.memberId)))} · ${esc(c.gun)}</div>
-      <div class="sub">${dayMonthLabel(c.date)} ${c.date.slice(0, 4)} · шар ${c.bb} г${c.note ? ` · ${esc(c.note)}` : ''}</div></div>
-      <div class="amt" style="text-align:right">${pts(c.speed)} м/с<div class="sub">${joules(c.speed, c.bb).toFixed(2)} Дж</div></div></li>`;
-  }).join('')}</ul>`;
-}
-
 function reminderBanner() {
   if (!isAdmin()) return '';
   const days = state.settings.reminderDays || [];
@@ -734,7 +732,7 @@ function rosterView() {
     const sub = [m.number, rank, sinceLabel(m.from), m.vk ? `ВК ${vkMention(m.vk)}` : ''].filter(Boolean).map(esc).join(' · ');
     return `<li data-act="openMember" data-id="${m.id}">
       <div class="grow">
-        <div class="name">${esc(displayName(m))}${m.groupLead ? '<span class="chip accent">ком. группы</span>' : ''}${m.veteran ? '<span class="chip">старичок</span>' : ''}${inLeave(m, now) ? '<span class="chip">отпуск</span>' : ''}${m.admin ? '<span class="chip accent">админ</span>' : ''}${b && b.days <= 7 ? ' <span class="chip">ДР</span>' : ''}</div>
+        <div class="name">${nameHtml(m)}${m.groupLead ? '<span class="chip lead-chip">ком. группы</span>' : ''}${m.veteran ? '<span class="chip">старичок</span>' : ''}${inLeave(m, now) ? '<span class="chip">отпуск</span>' : ''}${m.admin ? '<span class="chip accent">админ</span>' : ''}${b && b.days <= 7 ? ' <span class="chip">ДР</span>' : ''}</div>
         <div class="sub">${sub}</div>
       </div>
       ${m.left && m.left <= now ? ''
@@ -747,10 +745,11 @@ function rosterView() {
 
   const groups = new Map();
   for (const m of fighters) { const g = m.group || ''; groups.set(g, [...(groups.get(g) || []), m]); }
-  const names = [...groups.keys()].sort((a, b) => (!a) - (!b) || a.localeCompare(b, 'ru'));
+  const names = [...groups.keys()].sort(byGroup);
+  const total = new Map(fighters.map((m) => [m.id, pointsSummary(m).total]));
   const single = names.length === 1 && !names[0];
   const sections = names.map((g) => {
-    const list = groups.get(g).sort((a, b) => (b.groupLead ? 1 : 0) - (a.groupLead ? 1 : 0) || byName(a, b));
+    const list = groups.get(g).sort((a, b) => (b.groupLead ? 1 : 0) - (a.groupLead ? 1 : 0) || total.get(b.id) - total.get(a.id) || byName(a, b));
     return `<h3 ${g === names[0] ? 'style="margin-top:0"' : ''}>${esc(single ? 'Бойцы' : g || 'Без группы')} · ${list.length}</h3><ul class="list">${list.map(item).join('')}</ul>`;
   }).join('');
   return `
@@ -780,6 +779,7 @@ function ranksView() {
     </div>` : `<div class="card card-ok small">Норма за ${prev.label} выполнена всеми ✓</div>`;
   return `
     ${quotaCard}
+    <button class="btn block" style="margin-bottom:10px" data-act="openRegistry">▸ Реестр начислений баллов</button>
     <div class="small muted" style="margin-bottom:10px">${q.label} · минимум ${min} баллов за квартал.
       Баллы за игры начисляются сами по отметке «[+] еду» на прошедших играх, остальное начисляет админ по Положению.
       Месяц академического отпуска засчитывается как ${min} баллов.</div>
@@ -788,7 +788,7 @@ function ranksView() {
       const pct = next ? Math.max(0, Math.min(100, Math.round(((p.total - p.rank.min) / (next.min - p.rank.min)) * 100))) : 100;
       return `<li data-act="openMember" data-id="${m.id}">
         <div class="rank">#${i + 1}</div>
-        <div class="grow"><div class="name">${esc(shortName(m))}${m.number ? ` <span class="sub">${esc(m.number)}</span>` : ''}${m.veteran ? ' <span class="chip">старичок</span>' : ''}${inLeave(m, monthKey()) ? ' <span class="chip">отпуск</span>' : ''}</div>
+        <div class="grow"><div class="name">${nameHtml(m, shortName(m))}${m.number ? ` <span class="sub">${esc(m.number)}</span>` : ''}${m.veteran ? ' <span class="chip">старичок</span>' : ''}${inLeave(m, monthKey()) ? ' <span class="chip">отпуск</span>' : ''}</div>
           <div class="sub" style="color:var(--text)">${esc(p.rank.title)}</div>
           <div class="progress" style="margin:4px 0 2px"><div style="width:${pct}%"></div></div>
           <div class="sub">${next ? `до «${esc(next.title)}» — ${pts(next.min - p.total)}` : 'высшее звание'}</div></div>
@@ -835,7 +835,7 @@ function memberCard(m) {
   const paused = inPause(m, monthKey());
   const status = m.left ? 'покинул команду' : paused ? 'пауза' : STATUS_LABEL[m.status] || 'боец';
   openSheet(`
-    <h2>${esc(displayName(m))}</h2>
+    <h2>${nameHtml(m)}</h2>
     <div class="row" style="gap:4px">
       <span class="chip ${m.left || paused ? '' : 'ok'}">${status}</span>
       <span class="chip accent">${esc(p.rank.title)}</span>
@@ -859,8 +859,6 @@ function memberCard(m) {
       ${p.history.length ? `<div>Норма</div><div>${p.history.slice(-4).map((h) => `${h.q.label.replace(' квартал ', ' кв. ')}: ${pts(h.got)} ${h.ok ? '✓' : '×'}`).join('<br>')}</div>` : ''}
       ${(m.leaves || []).length ? `<div>Академ. отпуск</div><div>${m.leaves.map((k) => `${monthLabel(k)}${admin ? ` <a href="#" data-del-leave="${k}">×</a>` : ''}`).join(', ')}</div>` : ''}
       <div>Посещаемость</div><div>${s.pct === null ? 'игр ещё не было' : `<b>${s.pct}%</b> — ${s.yes} из ${s.total} игр`}</div>
-      ${(() => { const c = state.chrono.filter((x) => x.memberId === m.id).sort((a, b) => b.date.localeCompare(a.date))[0];
-        return c ? `<div>Хрон</div><div>${esc(c.gun)}: ${pts(c.speed)} м/с, ${joules(c.speed, c.bb).toFixed(2)} Дж (${dayMonthLabel(c.date)})</div>` : ''; })()}
     </div>
     ${p.entries.length ? `<h3 style="margin:4px 0 0">Начисления баллов</h3>
       <ul class="list">${p.entries.slice(0, 12).map((e) => `
@@ -936,7 +934,7 @@ function memberForm(m) {
     <label class="field">Баллы, накопленные до учёта в приложении<input type="number" inputmode="decimal" step="any" name="pointsBase" value="${Number(m.pointsBase) || 0}"></label>
     <label class="toggle"><input type="checkbox" name="exempt" ${m.exempt ? 'checked' : ''}> Освобождён от взносов</label>
     ${!isNew ? `<label class="toggle"><input type="checkbox" name="gone" ${m.left ? 'checked' : ''}> Покинул команду</label>
-      <label class="field">Последний месяц в команде<input type="month" name="last" value="${m.left ? shiftMonth(m.left, -1) : monthKey()}"></label>` : ''}
+      <label class="field">Последний месяц в команде<input type="month" name="last" value="${m.left ? shiftMonth(m.left, -1) : shiftMonth(monthKey(), -1)}"></label>` : ''}
     ${accessBlock}
     <div class="row">
       ${!isNew ? '<button class="btn danger" value="delete" formnovalidate>Удалить</button>' : ''}
@@ -986,7 +984,7 @@ function memberForm(m) {
         feeFrom,
         pointsBase: Number(fd.get('pointsBase')) || 0,
         exempt: fd.get('exempt') === 'on',
-        left: fd.get('gone') === 'on' ? shiftMonth(fd.get('last') || now, 1) : null,
+        left: fd.get('gone') === 'on' ? shiftMonth(fd.get('last') || shiftMonth(now, -1), 1) : null,
       };
       if (isNew) Object.assign(data, { admin: false });
       run(() => store.saveItem('members', data), isNew ? 'Участник добавлен' : 'Сохранено');
@@ -1025,9 +1023,44 @@ function pointsForm(m) {
       const amount = Math.abs(Number(fd.get('amount')) || 0) * (PENALTY.has(cat) ? -1 : 1);
       if (!amount) return false;
       const note = [title, fd.get('note').trim()].filter(Boolean).join(': ');
-      run(() => store.saveItem('points', { memberId: fd.get('memberId'), cat, amount, date: fd.get('date') || todayISO(), note }),
+      run(() => store.saveItem('points', { memberId: fd.get('memberId'), cat, amount, date: fd.get('date') || todayISO(), note, createdAt: Date.now() }),
         amount > 0 ? `+${pts(amount)} баллов` : `Штраф ${pts(amount)}`);
     },
+  });
+}
+
+/** Общий реестр начислений: кому, что и за что — новые сверху, по 50 записей. */
+function registrySheet(limit = 50) {
+  const admin = isAdmin();
+  const all = state.members.flatMap((m) => pointEntries(m).map((e) => ({ ...e, m })))
+    .sort((a, b) => b.date.localeCompare(a.date) || (b.createdAt || 0) - (a.createdAt || 0));
+  const list = all.slice(0, limit);
+  openSheet(`
+    <h2>Реестр начислений</h2>
+    <div class="small muted">Последние ${list.length} из ${all.length}. «авто» — за игры, подвоз и штрафы за норму.</div>
+    ${list.length ? `<ul class="list">${list.map((e) => `
+      <li class="static"><div class="grow">
+        <div class="name">${nameHtml(e.m, shortName(e.m))} <span class="sub">${esc(POINT_CATS[e.cat] || e.cat)}</span></div>
+        <div class="sub">${dayMonthLabel(e.date)} ${e.date.slice(0, 4)}${e.note ? ` · ${esc(e.note)}` : ''}${e.auto ? ' · авто' : ''}</div></div>
+        <div class="amt">${e.amount > 0 ? '+' : ''}${pts(e.amount)}</div>
+        ${admin && !e.auto ? `<button type="button" class="btn small-btn" data-del-point="${e.id}" aria-label="Удалить">×</button>` : ''}
+      </li>`).join('')}</ul>` : '<div class="list empty">Начислений пока нет</div>'}
+    <div class="row">
+      ${all.length > limit ? '<button class="btn" value="more">Ещё 50</button>' : ''}
+      <button type="button" class="btn" id="regShare">» В ВК</button>
+      <button class="btn primary" value="close">Готово</button>
+    </div>`, {
+    onMount(form) {
+      form.querySelectorAll('[data-del-point]').forEach((btn) => btn.addEventListener('click', async () => {
+        if (!confirm('Удалить начисление?')) return;
+        if (await run(() => store.deleteItem('points', btn.dataset.delPoint), 'Удалено')) btn.closest('li').remove();
+      }));
+      $('#regShare', form).addEventListener('click', () => shareText([
+        `★ ${state.settings.teamName} — начисления баллов`, '',
+        ...list.slice(0, 20).map((e) => `${dayMonthLabel(e.date)} · ${shortName(e.m)} ${e.amount > 0 ? '+' : ''}${pts(e.amount)} — ${e.note || POINT_CATS[e.cat] || e.cat}`),
+      ].join('\n')));
+    },
+    onSubmit(fd, action) { if (action === 'more') later(() => registrySheet(limit + 50)); },
   });
 }
 
@@ -1341,7 +1374,7 @@ function presenceForm(ev) {
   });
 }
 
-/* ================= Заявки, «Я перевёл», сборы, хрон, Положение ================= */
+/* ================= Заявки, «Я перевёл», сборы, Положение ================= */
 
 const STATUS_TEXT = { pending: 'на проверке', approved: 'принято', rejected: 'отклонено' };
 
@@ -1511,7 +1544,7 @@ async function approvePay(id) {
 
 async function approveClaim(id) {
   const c = state.claims.find((x) => x.id === id);
-  await store.saveItem('points', { memberId: c.memberId, cat: c.cat, amount: c.amount, date: c.date, note: [c.title, c.note].filter(Boolean).join(': ') });
+  await store.saveItem('points', { memberId: c.memberId, cat: c.cat, amount: c.amount, date: c.date, note: [c.title, c.note].filter(Boolean).join(': '), createdAt: Date.now() });
   await store.saveItem('claims', { id, status: 'approved', reviewedAt: Date.now() });
 }
 
@@ -1625,51 +1658,6 @@ function contributionForm(f) {
   });
 }
 
-/* ---------- Хрон-журнал ---------- */
-
-const joules = (speed, bb) => 0.5 * (Number(bb) / 1000) * Number(speed) ** 2;
-
-function chronoForm(c) {
-  const admin = isAdmin();
-  const isNew = !c;
-  c = c || { memberId: me?.memberId || '', gun: '', speed: '', bb: 0.2, date: todayISO(), note: '' };
-  const last = state.chrono.filter((x) => x.memberId === c.memberId).sort((a, b) => b.date.localeCompare(a.date))[0];
-  if (isNew && last) c.gun = last.gun;
-  const members = activeMembers(monthKey());
-  openSheet(`
-    <h2>${isNew ? 'Замер на хроне' : 'Замер'}</h2>
-    ${admin ? `<label class="field">Боец<select name="memberId">${members.map((m) => `<option value="${m.id}" ${m.id === c.memberId ? 'selected' : ''}>${esc(displayName(m))}</option>`).join('')}</select></label>` : ''}
-    <label class="field">Привод<input name="gun" required value="${esc(c.gun)}" placeholder="M4 CYMA, СВД…"></label>
-    <div class="row">
-      <label class="field" style="flex:1">Скорость, м/с<input type="number" inputmode="decimal" step="any" min="1" name="speed" required value="${c.speed}"></label>
-      <label class="field" style="flex:1">Шар, г<input type="number" inputmode="decimal" step="any" min="0.1" name="bb" required value="${c.bb}"></label>
-    </div>
-    <div class="small" id="joules"></div>
-    <label class="field">Дата<input type="date" name="date" required value="${c.date}"></label>
-    <label class="field">Заметка<input name="note" value="${esc(c.note)}" placeholder="полигон, хронограф…"></label>
-    <div class="row">
-      ${!isNew ? '<button class="btn danger" value="delete" formnovalidate>Удалить</button>' : ''}
-      <button class="btn" value="cancel" formnovalidate>Отмена</button>
-      <button class="btn primary" value="save">Сохранить</button>
-    </div>`, {
-    onMount(form) {
-      const upd = () => { const j = joules(form.speed.value, form.bb.value); $('#joules', form).textContent = j ? `Энергия: ${j.toFixed(2)} Дж` : ''; };
-      form.speed.addEventListener('input', upd);
-      form.bb.addEventListener('input', upd);
-      upd();
-    },
-    onSubmit(fd, action) {
-      if (action === 'delete') { run(() => store.deleteItem('chrono', c.id)); return; }
-      const memberId = admin ? fd.get('memberId') : me?.memberId;
-      if (!memberId) { toast('В локальном режиме выберите бойца'); return false; }
-      run(() => store.saveItem('chrono', {
-        id: c.id, memberId, gun: fd.get('gun').trim(), speed: Number(fd.get('speed')) || 0, bb: Number(fd.get('bb')) || 0.2,
-        date: fd.get('date') || todayISO(), note: fd.get('note').trim(),
-      }), 'Замер сохранён');
-    },
-  });
-}
-
 /* ---------- Положение ---------- */
 
 /** Мини-Markdown: заголовки #, ##, ###, списки «* », **жирный**. */
@@ -1767,6 +1755,7 @@ function settingsForm() {
       <label class="field" style="flex:1">Проверять норму с<input type="month" name="quotaSince" value="${s.quotaSince || monthKey()}"></label>
       <label class="field" style="flex:1">Отпуск, мес./год<input type="number" inputmode="numeric" min="0" name="leaveMaxPerYear" value="${s.leaveMaxPerYear ?? 2}"></label>
     </div>
+    <label class="field">Порядок групп, по группе на строку<textarea name="groupOrder" rows="4">${esc((s.groupOrder?.length ? s.groupOrder : DEFAULT_GROUP_ORDER).join('\n'))}</textarea></label>
     <label class="field">Чек-лист перед игрой, по пункту на строку<textarea name="checklist" rows="6">${esc((s.checklist?.length ? s.checklist : DEFAULT_CHECKLIST).join('\n'))}</textarea></label>
     <label class="field">Звания: «баллы звание», по строке на звание<textarea name="ranks" rows="8">${esc(ranks)}</textarea></label>
     <div class="small muted">Изменение взноса не меняет суммы уже начатых месяцев — их можно поправить на экране «Взносы».</div>
@@ -1790,6 +1779,7 @@ function settingsForm() {
         quotaSince: quarterOf(`${fd.get('quotaSince') || monthKey()}-01`).start.slice(0, 7),
         ranks: parsedRanks.length ? parsedRanks : s.ranks,
         checklist: fd.get('checklist').split('\n').map((x) => x.trim()).filter(Boolean),
+        groupOrder: fd.get('groupOrder').split('\n').map((x) => x.trim()).filter(Boolean),
       }), 'Сохранено');
     },
   });
@@ -1874,9 +1864,8 @@ const ACTIONS = {
   addClaim() { claimForm(); },
   addFund() { fundForm(); },
   openFund(id) { fundCard(state.funds.find((f) => f.id === id)); },
-  addChrono() { chronoForm(); },
-  editChrono(id) { chronoForm(state.chrono.find((c) => c.id === id)); },
   openRegulation() { regulationSheet(); },
+  openRegistry() { registrySheet(); },
   toggleSound() { setSound(!soundOn()); render(); },
   addPoints() { pointsForm(); },
   remindDebtors() {

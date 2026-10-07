@@ -27,7 +27,6 @@ export const emptyState = () => ({
   claims: [],    // заявки бойцов на баллы: {id, memberId, cat, title, amount, date, note, link, fileId, status:'pending'|'approved'|'rejected', reason, createdAt}
   payreports: [], // «Я перевёл»: {id, memberId, target:'dues'|fundId, month, amount, date, fileId, note, status, reason, createdAt}
   funds: [],     // целевые сборы: {id, title, goal, perPerson, deadline, note, closed, contributions:{memberId: amount}}
-  chrono: [],    // хрон-журнал: {id, memberId, gun, speed (м/с), bb (г), date, note}
 });
 
 export const DEFAULT_CHECKLIST = [
@@ -59,8 +58,8 @@ export function normalizeMember(m) {
   return out;
 }
 
-const COLLECTIONS = ['members', 'expenses', 'events', 'gear', 'points', 'claims', 'payreports', 'funds', 'chrono'];
-const MEMBER_OWNED = ['points', 'claims', 'payreports', 'chrono'];
+const COLLECTIONS = ['members', 'expenses', 'events', 'gear', 'points', 'claims', 'payreports', 'funds'];
+const MEMBER_OWNED = ['points', 'claims', 'payreports'];
 
 /** Записывает значение по вложенному пути объекта; null/undefined удаляет ключ. */
 function setPath(obj, path, value) {

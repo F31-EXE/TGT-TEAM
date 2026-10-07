@@ -567,6 +567,7 @@ export async function analyzeWorkbook(file, state) {
       group = group ? group.charAt(0).toUpperCase() + group.slice(1) : '';
       const past = cols.past >= 0 && !isBlank(r[cols.past]) ? num(r[cols.past]) : num(r[cols.total]) - num(r[cols.quarter]);
       const m = upsert(findMember(callsign), { callsign, number: numberText, group, groupLead, pointsBase: past });
+      if (group) { plan.settings.groupOrder ||= []; if (!plan.settings.groupOrder.includes(group)) plan.settings.groupOrder.push(group); }
       fighters++;
       for (const cat of ['game', 'training', 'contribution', 'discipline', 'safety']) {
         if (cols[cat] < 0) continue;
@@ -576,7 +577,7 @@ export async function analyzeWorkbook(file, state) {
         const key = `${m.id}|${cat}|${periodEnd}|${v}`;
         if (existing.has(key)) continue;
         existing.add(key);
-        plan.points.push({ id: uid(), memberId: m.id, date: periodEnd, cat, amount: v, note: `Импорт ${periodText}`.trim() });
+        plan.points.push({ id: uid(), memberId: m.id, date: periodEnd, cat, amount: v, note: `Импорт ${periodText}`.trim(), createdAt: Date.now() });
         entries++;
       }
     }
