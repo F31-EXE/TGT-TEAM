@@ -404,10 +404,7 @@ export async function analyzeWorkbook(file, state) {
         }
         if (afterTotal) continue;
         const cells = monthCols.map(([c, k]) => [k, r[c]]);
-        // «0» до первой оплаты — боец ещё не пришёл в команду, а не долг. Членство считаем с первой оплаты или «-».
-        const filled = cells.filter(([, v]) => !isBlank(v));
-        const firstReal = filled.findIndex(([, v]) => !(typeof v === 'number' ? v === 0 : /^0+([.,]0+)?$/.test(String(v).trim())));
-        const present = (firstReal >= 0 ? filled.slice(firstReal) : filled).map(([k]) => k);
+        const present = cells.filter(([, v]) => !isBlank(v)).map(([k]) => k);
         const paid = cells.map(([k, v]) => [k, parseAmount(v, plan.fees[k] ?? state.settings.fees?.[k] ?? state.settings.fee)]).filter(([, a]) => a > 0);
         let m = findMember(text) || (nameCol2 >= 0 ? findMember(r[nameCol2]) : null);
         if (!m) {
