@@ -62,12 +62,53 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // Боец может: отметить СВОЁ участие, отметить СВОЙ чек-лист и записаться в машину (подвоз).
     match /events/{id} {
       allow read: if isMember();
       allow write: if isAdmin();
       allow update: if isMember()
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendance'])
-        && request.resource.data.attendance.diff(resource.data.attendance).affectedKeys().hasOnly([myMemberId()]);
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['attendance', 'checks', 'rides'])
+        && request.resource.data.get('attendance', {}).diff(resource.data.get('attendance', {})).affectedKeys().hasOnly([myMemberId()])
+        && request.resource.data.get('checks', {}).diff(resource.data.get('checks', {})).affectedKeys().hasOnly([myMemberId()]);
+    }
+
+    // Заявки на баллы и «Я перевёл»: боец создаёт только свои и только на проверку; решает админ.
+    function ownPending() {
+      return isMember()
+        && request.resource.data.memberId == myMemberId()
+        && request.resource.data.status == 'pending';
+    }
+    match /claims/{id} {
+      allow read: if isMember();
+      allow create: if ownPending();
+      allow delete: if isAdmin() || (isMember() && resource.data.memberId == myMemberId() && resource.data.status == 'pending');
+      allow update: if isAdmin();
+    }
+    match /payreports/{id} {
+      allow read: if isMember();
+      allow create: if ownPending();
+      allow delete: if isAdmin() || (isMember() && resource.data.memberId == myMemberId() && resource.data.status == 'pending');
+      allow update: if isAdmin();
+    }
+
+    // Фото чеков и подтверждений.
+    match /files/{id} {
+      allow read: if isMember();
+      allow create: if isMember() && request.resource.data.memberId == myMemberId() && request.resource.data.data.size() < 900000;
+      allow delete: if isAdmin() || (isMember() && resource.data.memberId == myMemberId());
+    }
+
+    match /funds/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+
+    // Хрон-журнал: свои замеры боец добавляет сам, админ — любые.
+    match /chrono/{id} {
+      allow read: if isMember();
+      allow create: if isAdmin() || (isMember() && request.resource.data.memberId == myMemberId());
+      allow update: if isAdmin() || (isMember() && resource.data.memberId == myMemberId() && request.resource.data.memberId == myMemberId());
+      allow delete: if isAdmin() || (isMember() && resource.data.memberId == myMemberId());
     }
   }
 }

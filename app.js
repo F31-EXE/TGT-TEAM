@@ -1,9 +1,11 @@
-import { store, cloudConfigured, errorText, emptyState, normalizeState } from './store.js';
+import { store, cloudConfigured, errorText, emptyState, normalizeState, DEFAULT_CHECKLIST } from './store.js';
 import {
   uid, esc, monthKey, todayISO, shiftMonth, monthLabel, dateLabel, dayMonthLabel, sinceLabel,
   normLogin, randomPin, vkLink, vkMention,
 } from './util.js';
 import { exportXlsx, analyzeWorkbook } from './excel.js';
+import { DEFAULT_REGULATION } from './regulation.js';
+import { boot, initClicks, soundOn, setSound, compressImage } from './fx.js';
 
 /* ================= Состояние ================= */
 
@@ -97,10 +99,14 @@ function monthSummary(month) {
   return { members, payers, free, expected, collected, paid, partial, unpaid };
 }
 
+const fundCollected = (f) => Object.values(f.contributions || {}).reduce((a, v) => a + (Number(v) || 0), 0);
+const fundsTotal = () => state.funds.reduce((a, f) => a + fundCollected(f), 0);
+
 function treasuryBalance() {
   let total = Number(state.settings.startBalance) || 0;
   for (const mo of Object.values(state.payments)) for (const v of Object.values(mo)) total += v;
   for (const e of state.expenses) total += e.kind === 'in' ? e.amount : -e.amount;
+  total += fundsTotal();
   return Math.round(total * 100) / 100;
 }
 
@@ -146,14 +152,23 @@ function quarterOf(iso) {
 const nextQuarter = (q) => quarterOf(`${shiftMonth(q.start.slice(0, 7), 3)}-01`);
 const inLeave = (m, month) => (m.leaves || []).includes(month);
 
-/** Начисления: ручные + автоматические за прошедшие игры с отметкой «еду». */
+/** Был ли боец на игре: если админ отметил факт присутствия — по факту, иначе по «еду». */
+const attended = (m, e) => (e.presenceChecked ? !!e.presence?.[m.id] : e.attendance?.[m.id] === 'yes');
+
+/** Начисления: ручные + автоматические за прошедшие игры и подвоз сокомандников (+1 за пассажира). */
 function baseEntries(m) {
   const today = todayISO();
   const manual = state.points.filter((p) => p.memberId === m.id);
-  const auto = state.events
-    .filter((e) => e.date < today && e.attendance?.[m.id] === 'yes' && Number(e.points) > 0)
+  const past = state.events.filter((e) => e.date < today);
+  const auto = past.filter((e) => attended(m, e) && Number(e.points) > 0)
     .map((e) => ({ id: `ev-${e.id}`, date: e.date, cat: e.kind === 'training' ? 'training' : 'game', amount: Number(e.points), note: e.title, auto: true }));
-  return [...manual, ...auto];
+  const rides = past.map((e) => {
+    const car = e.rides?.[m.id];
+    if (!car || !attended(m, e)) return null;
+    const pax = Object.keys(car.pax || {}).map(memberById).filter((x) => x && attended(x, e));
+    return pax.length ? { id: `ride-${e.id}`, date: e.date, cat: 'logistics', amount: pax.length, note: `Подвоз: ${pax.map(shortName).join(', ')} (${e.title})`, auto: true } : null;
+  }).filter(Boolean);
+  return [...manual, ...auto, ...rides];
 }
 
 /** Баллы в зачёт нормы за квартал: начисления + 18 за каждый месяц академического отпуска. */
@@ -214,8 +229,8 @@ function pointsSummary(m) {
 function attendanceStats(m) {
   const today = todayISO();
   const past = state.events.filter((e) => e.date < today && onDuty(m, e.date.slice(0, 7)) && !inLeave(m, e.date.slice(0, 7)));
-  const yes = past.filter((e) => e.attendance?.[m.id] === 'yes').length;
-  const no = past.filter((e) => e.attendance?.[m.id] === 'no').length;
+  const yes = past.filter((e) => attended(m, e)).length;
+  const no = past.length - yes;
   return { yes, no, total: past.length, pct: past.length ? Math.round((yes / past.length) * 100) : null };
 }
 
@@ -326,6 +341,9 @@ function openSheet(html, { onSubmit, onMount } = {}) {
   dlg.onclick = (e) => { if (e.target === dlg) dlg.close(); };
   dlg.showModal();
   if (onMount) onMount(form);
+  // Фокус браузер ставит на первую кнопку (часто внизу) — возвращаем шторку к началу.
+  document.activeElement?.blur?.();
+  dlg.scrollTop = 0;
 }
 const later = (fn) => setTimeout(fn, 0);
 
@@ -436,7 +454,11 @@ const VIEWS = {
       </li>`;
     };
 
+    const inboxCount = admin ? pendingItems().length : 0;
     return `
+      ${inboxCount ? `<div class="banner"><div class="row" style="align-items:center;flex-wrap:nowrap">
+        <div style="flex:1">▸ На проверку: <b>${inboxCount}</b> (оплаты и заявки на баллы)</div>
+        <button class="btn small-btn" data-act="openInbox">Открыть</button></div></div>` : ''}
       ${reminderBanner()}
       ${birthdayBanner()}
       ${myStatusCard()}
@@ -479,7 +501,8 @@ const VIEWS = {
       </div>
       ${v === 'list' ? rosterView() : v === 'stats' ? attendanceView() : ranksView()}
       ${isAdmin() && v === 'list' ? '<button class="fab" data-act="addMember" aria-label="Добавить">+</button>' : ''}
-      ${isAdmin() && v === 'ranks' ? '<button class="fab" data-act="addPoints" aria-label="Начислить баллы">+</button>' : ''}`;
+      ${v === 'ranks' && isAdmin() ? '<button class="fab" data-act="addPoints" aria-label="Начислить баллы">+</button>'
+        : v === 'ranks' && me?.memberId ? '<button class="fab" data-act="addClaim" aria-label="Заявка на баллы">+</button>' : ''}`;
   },
 
   treasury() {
@@ -500,9 +523,18 @@ const VIEWS = {
         <div style="font-size:28px;font-weight:800" class="${bal < 0 ? 'neg' : ''}">${money(bal)}</div>
         <div class="small muted" style="margin-top:6px">
           Старт ${money(state.settings.startBalance || 0)} · взносы <span class="pos">+${money(dues)}</span>
-          ${inc ? `· поступления <span class="pos">+${money(inc)}</span>` : ''} · расходы <span class="neg">−${money(out)}</span>
+          ${inc ? `· поступления <span class="pos">+${money(inc)}</span>` : ''}${fundsTotal() ? ` · сборы <span class="pos">+${money(fundsTotal())}</span>` : ''} · расходы <span class="neg">−${money(out)}</span>
         </div>
       </div>
+      <h3>Целевые сборы</h3>
+      ${state.funds.length ? `<ul class="list">${[...state.funds].sort((a, b) => (a.closed - b.closed) || String(b.deadline).localeCompare(String(a.deadline))).map((f) => {
+        const got = fundCollected(f);
+        return `<li data-act="openFund" data-id="${f.id}"><div class="grow">
+          <div class="name">${esc(f.title)}${f.closed ? ' <span class="chip">закрыт</span>' : ''}</div>
+          ${f.goal ? `<div class="progress" style="margin:6px 0 2px"><div style="width:${Math.min(100, Math.round((got / f.goal) * 100))}%"></div></div>` : ''}
+          <div class="sub">${money(got)}${f.goal ? ` из ${money(f.goal)}` : ''}${f.deadline ? ` · до ${dayMonthLabel(f.deadline)}` : ''}</div></div></li>`;
+      }).join('')}</ul>` : '<div class="list empty">Сборы на крупные игры и покупки — отдельно от ежемесячных взносов.</div>'}
+      ${admin ? '<button class="btn block" style="margin-top:8px" data-act="addFund">+ Новый сбор</button>' : ''}
       ${cats.length ? `<h3>Расходы по категориям</h3><ul class="list">${cats.map(([c, v]) => `
         <li class="static"><div class="grow"><div class="name">${esc(c)}</div>
         <div class="progress" style="margin:6px 0 0"><div style="width:${Math.round((v / out) * 100)}%"></div></div></div>
@@ -558,6 +590,12 @@ const VIEWS = {
         <b>${esc(self ? displayName(self) : '—')}</b> <span class="chip ${admin ? 'accent' : ''}">${admin ? 'админ' : 'участник'}</span></div>
         <button class="btn" style="flex:none" data-act="logout">Выйти</button></div>` : ''}
 
+      <button class="btn block" data-act="openRegulation">▸ Положение о балльной системе</button>
+
+      <h3>Хрон-журнал</h3>
+      ${chronoView()}
+      <button class="btn block" style="margin-top:8px" data-act="addChrono">+ Замер на хроне</button>
+
       <h3>Дни рождения</h3>
       ${bdays.length ? `<ul class="list">${bdays.map(({ m, b }) => `
         <li data-act="openMember" data-id="${m.id}"><div class="grow"><div class="name">${esc(displayName(m))}</div>
@@ -579,8 +617,8 @@ const VIEWS = {
         <p class="small muted" style="margin-top:0">Выгрузка всех данных в таблицу: состав, взносы по месяцам, казна, игры, посещаемость.
         ${admin ? 'Загрузка понимает таблицу взносов (доходы по месяцам, расходы, состав со статусами) и балльную систему (.csv или .xlsx). Загружайте файлы по очереди — данные дополняются.' : ''}</p>
         <div class="row">
-          <button class="btn" data-act="exportExcel">⬇️ Выгрузить .xlsx</button>
-          ${admin ? '<button class="btn" data-act="importExcel">⬆️ Загрузить из Excel</button>' : ''}
+          <button class="btn" data-act="exportExcel">↓ Выгрузить .xlsx</button>
+          ${admin ? '<button class="btn" data-act="importExcel">↑ Загрузить из Excel</button>' : ''}
         </div>
       </div>
 
@@ -589,13 +627,14 @@ const VIEWS = {
         <div class="row"><button class="btn" data-act="editSettings">Команда и взнос</button></div>
         <p class="small muted">Резервная копия (JSON)${cloudConfigured ? ' — перенос данных с телефона в общую базу' : ''}:</p>
         <div class="row">
-          <button class="btn" data-act="exportData">⬇️ Копия</button>
-          <button class="btn" data-act="importData">⬆️ Загрузить</button>
+          <button class="btn" data-act="exportData">↓ Копия</button>
+          <button class="btn" data-act="importData">↑ Загрузить</button>
         </div>
         ${!cloudConfigured ? '<div class="row" style="margin-top:8px"><button class="btn danger" data-act="resetData">Стереть всё</button></div>' : ''}
       </div>` : ''}
       ${!cloudConfigured ? '<p class="small muted">! Локальный режим: данные только на этом телефоне. Общая база подключается по инструкции в README.</p>' : ''}
-      <p class="small muted" style="text-align:center">TGT Team · v2.0</p>`;
+      <div class="row" style="margin-top:16px"><button class="btn" data-act="toggleSound">Звук щелчков: ${soundOn() ? 'вкл' : 'выкл'}</button></div>
+      <p class="small muted" style="text-align:center">TGT Team · v3.0</p>`;
   },
 };
 
@@ -607,6 +646,21 @@ function birthdayBanner() {
       <div style="flex:1">▸ <b>${esc(shortName(m))}</b> — ${b.days === 0 ? `сегодня ДР, ${b.age} ${yearsWord(b.age)}!` : `ДР ${whenText(b.days)} (${dayMonthLabel(m.birthday)})`}</div>
       ${b.days <= 1 ? `<button class="btn small-btn" data-act="congrats" data-id="${m.id}">Поздравить</button>` : ''}
     </div>`).join('')}</div>`;
+}
+
+/** Последний замер каждого бойца. */
+function chronoView() {
+  const latest = new Map();
+  for (const c of [...state.chrono].sort((a, b) => a.date.localeCompare(b.date))) latest.set(`${c.memberId}|${normLogin(c.gun)}`, c);
+  const list = [...latest.values()].filter((c) => memberById(c.memberId)).sort((a, b) => byName(memberById(a.memberId), memberById(b.memberId)));
+  if (!list.length) return '<div class="list empty">Скорость привода и энергия — для допуска на полигон.</div>';
+  return `<ul class="list">${list.map((c) => {
+    const canEdit = isAdmin() || c.memberId === me?.memberId;
+    return `<li ${canEdit ? `data-act="editChrono" data-id="${c.id}"` : 'class="static"'}><div class="grow">
+      <div class="name">${esc(shortName(memberById(c.memberId)))} · ${esc(c.gun)}</div>
+      <div class="sub">${dayMonthLabel(c.date)} ${c.date.slice(0, 4)} · шар ${c.bb} г${c.note ? ` · ${esc(c.note)}` : ''}</div></div>
+      <div class="amt" style="text-align:right">${pts(c.speed)} м/с<div class="sub">${joules(c.speed, c.bb).toFixed(2)} Дж</div></div></li>`;
+  }).join('')}</ul>`;
 }
 
 function reminderBanner() {
@@ -626,13 +680,16 @@ function myStatusCard() {
   const p = pointsSummary(m);
   const min = state.settings.pointsMin || 0;
   const rankLine = `<div class="small muted" style="margin-top:6px">${esc(p.rank.title)} · ${pts(p.total)} баллов · квартал ${pts(p.quarter)}${min ? ` из ${min}` : ''}</div>`;
-  if (m.status === 'recruit') return `<div class="card"><b>Вы рекрут</b><div class="small muted">Рекруты не платят взносы. После принятия в бойцы взнос начнёт начисляться.</div>${rankLine}</div>`;
+  if (m.status === 'recruit') return `<div class="card"><b>Вы рекрут</b><div class="small muted">Рекруты не платят взносы. После принятия в бойцы взнос начнёт начисляться.</div>${rankLine}${myRequests()}
+    <div class="row" style="margin-top:10px"><button class="btn" data-act="addClaim">Заявка на баллы</button></div></div>`;
   if (inPause(m, monthKey())) return `<div class="card"><b>Вы на паузе</b><div class="small muted">Во время паузы взносы не начисляются.</div>${rankLine}</div>`;
   const { debt, debtMonths, prepaid } = ledger(m);
   return `<div class="card ${debt ? 'card-bad' : 'card-ok'}">
     ${debt ? `<b>Ваш долг: ${money(debt)}</b><div class="small muted">${debtMonths.map(monthLabel).join(', ')}</div>`
       : `<b>Взносы оплачены${prepaid ? ` · аванс ${money(prepaid)}` : ''}</b>`}
     ${rankLine}
+    ${myRequests()}
+    <div class="row" style="margin-top:10px"><button class="btn" data-act="payReport">Я перевёл</button><button class="btn" data-act="addClaim">Заявка на баллы</button></div>
   </div>`;
 }
 
@@ -776,6 +833,8 @@ function memberCard(m) {
       ${p.history.length ? `<div>Норма</div><div>${p.history.slice(-4).map((h) => `${h.q.label.replace(' квартал ', ' кв. ')}: ${pts(h.got)} ${h.ok ? '✓' : '×'}`).join('<br>')}</div>` : ''}
       ${(m.leaves || []).length ? `<div>Академ. отпуск</div><div>${m.leaves.map((k) => `${monthLabel(k)}${admin ? ` <a href="#" data-del-leave="${k}">×</a>` : ''}`).join(', ')}</div>` : ''}
       <div>Посещаемость</div><div>${s.pct === null ? 'игр ещё не было' : `<b>${s.pct}%</b> — ${s.yes} из ${s.total} игр`}</div>
+      ${(() => { const c = state.chrono.filter((x) => x.memberId === m.id).sort((a, b) => b.date.localeCompare(a.date))[0];
+        return c ? `<div>Хрон</div><div>${esc(c.gun)}: ${pts(c.speed)} м/с, ${joules(c.speed, c.bb).toFixed(2)} Дж (${dayMonthLabel(c.date)})</div>` : ''; })()}
     </div>
     ${p.entries.length ? `<h3 style="margin:4px 0 0">Начисления баллов</h3>
       <ul class="list">${p.entries.slice(0, 12).map((e) => `
@@ -1137,25 +1196,63 @@ function eventForm(ev) {
   });
 }
 
-function eventCard(ev) {
+function eventCard(evIn) {
+  const ev = state.events.find((e) => e.id === evIn.id) || evIn;
   const admin = isAdmin();
-  const members = activeMembers(ev.date.slice(0, 7)).sort((a, b) => (b.id === me?.memberId) - (a.id === me?.memberId));
+  const meId = me?.memberId;
+  const today = todayISO();
+  const past = ev.date < today;
+  const members = activeMembers(ev.date.slice(0, 7)).sort((a, b) => (b.id === meId) - (a.id === meId));
   const att = { ...(ev.attendance || {}) };
-  const canEdit = (mid) => admin || mid === me?.memberId;
+  const canEdit = (mid) => admin || mid === meId;
   const rows = members.map((m) => {
     const v = att[m.id];
     const editable = canEdit(m.id);
-    return `<li class="static${m.id === me?.memberId ? ' mine' : ''}"><div class="grow"><div class="name">${esc(shortName(m))}${m.id === me?.memberId ? ' <span class="chip accent">вы</span>' : ''}</div></div>
+    const fact = ev.presenceChecked ? (ev.presence?.[m.id] ? '<span class="chip ok">был</span>' : '<span class="chip">не был</span>') : '';
+    return `<li class="static${m.id === meId ? ' mine' : ''}"><div class="grow"><div class="name">${esc(shortName(m))}${m.id === meId ? ' <span class="chip accent">вы</span>' : ''} ${fact}</div></div>
       <div class="att" data-mid="${m.id}">${['yes', 'maybe', 'no'].map((k) => `
         <button type="button" data-v="${k}" class="${v === k ? 'on' : ''}" ${editable ? '' : 'disabled'}>${{ yes: '+', maybe: '?', no: '×' }[k]}</button>`).join('')}
       </div></li>`;
   }).join('');
+
+  // Подвоз: машины, свободные места, пассажиры.
+  const rides = ev.rides || {};
+  const myCar = rides[meId];
+  const myRide = Object.entries(rides).find(([, c]) => c.pax?.[meId]);
+  const cars = Object.entries(rides).map(([driverId, c]) => {
+    const pax = Object.keys(c.pax || {});
+    const free = (Number(c.seats) || 0) - pax.length;
+    const action = past || !meId ? ''
+      : driverId === meId ? '<button type="button" class="btn small-btn" data-ride="drop">Убрать</button>'
+      : myRide?.[0] === driverId ? '<button type="button" class="btn small-btn" data-ride="leave">Выйти</button>'
+      : !myCar && !myRide && free > 0 ? `<button type="button" class="btn small-btn" data-ride="join" data-driver="${driverId}">Поеду</button>` : '';
+    return `<li class="static"><div class="grow"><div class="name">${esc(shortName(memberById(driverId)))} <span class="chip">мест ${free}/${c.seats}</span></div>
+      <div class="sub">${pax.length ? pax.map((id) => esc(shortName(memberById(id)))).join(', ') : 'пассажиров нет'}</div></div>${action}</li>`;
+  }).join('');
+
+  // Чек-лист перед игрой.
+  const items = state.settings.checklist?.length ? state.settings.checklist : DEFAULT_CHECKLIST;
+  const myChecks = new Set(ev.checks?.[meId] || []);
+  const ready = members.filter((m) => (ev.checks?.[m.id] || []).length >= items.length);
+  const going = members.filter((m) => att[m.id] === 'yes');
+
   openSheet(`
     <h2>${esc(ev.title)}</h2>
-    <div class="muted">${dateLabel(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}${ev.place ? ` · ${esc(ev.place)}` : ''}</div>
+    <div class="muted">${dateLabel(ev.date)}${ev.time ? `, ${esc(ev.time)}` : ''}${ev.place ? ` · ${esc(ev.place)}` : ''}
+      ${Number(ev.points) ? ` · ${pts(ev.points)} балл.` : ''}</div>
     ${ev.notes ? `<div class="card" style="margin:0;white-space:pre-wrap">${esc(ev.notes)}</div>` : ''}
-    <h3 style="margin:4px 0 0">Кто едет</h3>
+    <h3 style="margin:4px 0 0">Кто едет${ev.presenceChecked ? ' · факт отмечен' : ''}</h3>
     ${members.length ? `<ul class="list">${rows}</ul>` : '<div class="muted">Нет участников</div>'}
+    ${admin && ev.date <= today ? `<button class="btn" value="presence" formnovalidate>${ev.presenceChecked ? 'Изменить факт присутствия' : 'Отметить, кто реально был'}</button>` : ''}
+
+    <h3 style="margin:4px 0 0">Подвоз · +1 балл водителю за пассажира</h3>
+    ${cars ? `<ul class="list">${cars}</ul>` : '<div class="small muted">Пока никто не предложил машину.</div>'}
+    ${!past && meId && !myCar && !myRide ? '<button type="button" class="btn" data-ride="offer">Я на машине — возьму людей</button>' : ''}
+
+    ${!past ? `<h3 style="margin:4px 0 0">Чек-лист перед игрой</h3>
+      ${meId ? `<div class="checklist">${items.map((t, i) => `<label class="toggle"><input type="checkbox" data-check="${i}" ${myChecks.has(i) ? 'checked' : ''}> ${esc(t)}</label>`).join('')}</div>` : ''}
+      <div class="small muted">Собрались полностью: ${ready.length} из ${going.length || members.length}${ready.length ? ` — ${ready.map((m) => esc(shortName(m))).join(', ')}` : ''}</div>` : ''}
+
     <div class="row">
       <button type="button" class="btn" id="shareEvent">» В ВК</button>
       ${admin ? '<button class="btn" value="edit" formnovalidate>Изменить</button>' : ''}
@@ -1172,10 +1269,427 @@ function eventCard(ev) {
         const ok = await run(() => store.setAttendance(ev.id, mid, next));
         if (!ok) { if (prev) att[mid] = prev; else delete att[mid]; paint(); }
       }));
+      form.querySelectorAll('[data-check]').forEach((box) => box.addEventListener('change', () => {
+        const i = Number(box.dataset.check);
+        if (box.checked) myChecks.add(i); else myChecks.delete(i);
+        run(() => store.setEventField(ev.id, ['checks', meId], [...myChecks].sort((a, b) => a - b)));
+      }));
+      form.querySelectorAll('[data-ride]').forEach((b) => b.addEventListener('click', async () => {
+        const kind = b.dataset.ride;
+        let ok = true;
+        if (kind === 'offer') {
+          const seats = Number(prompt('Сколько свободных мест в машине?', '3'));
+          if (!seats || seats < 1) return;
+          ok = await run(() => store.setEventField(ev.id, ['rides', meId], { seats: Math.min(seats, 8), pax: {} }), 'Машина добавлена');
+        }
+        if (kind === 'drop') ok = await run(() => store.setEventField(ev.id, ['rides', meId], null));
+        if (kind === 'join') ok = await run(() => store.setEventField(ev.id, ['rides', b.dataset.driver, 'pax', meId], true), 'Место занято');
+        if (kind === 'leave') ok = await run(() => store.setEventField(ev.id, ['rides', myRide[0], 'pax', meId], null));
+        if (ok) later(() => eventCard(ev));
+      }));
       $('#shareEvent', form).addEventListener('click', () => shareText(eventReport({ ...ev, attendance: att })));
     },
     onSubmit(fd, action) {
       if (action === 'edit') later(() => eventForm(ev));
+      if (action === 'presence') later(() => presenceForm(ev));
+    },
+  });
+}
+
+/** Админ после игры отмечает, кто реально приехал: баллы и посещаемость считаются по факту. */
+function presenceForm(ev) {
+  const members = activeMembers(ev.date.slice(0, 7));
+  const was = (m) => (ev.presenceChecked ? !!ev.presence?.[m.id] : ev.attendance?.[m.id] === 'yes');
+  openSheet(`
+    <h2>Кто был: ${esc(ev.title)}</h2>
+    <p class="small muted" style="margin:0">Сначала отмечены те, кто нажал «еду». Снимите галочку с не приехавших и добавьте тех, кто приехал без отметки.</p>
+    <div class="checklist">${members.map((m) => `<label class="toggle"><input type="checkbox" name="p_${m.id}" ${was(m) ? 'checked' : ''}> ${esc(displayName(m))}</label>`).join('')}</div>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Сохранить</button>
+    </div>`, {
+    onSubmit(fd) {
+      const presence = Object.fromEntries(members.map((m) => [m.id, fd.get(`p_${m.id}`) === 'on']));
+      run(() => store.saveItem('events', { id: ev.id, presence, presenceChecked: true }), 'Присутствие отмечено');
+    },
+  });
+}
+
+/* ================= Заявки, «Я перевёл», сборы, хрон, Положение ================= */
+
+const STATUS_TEXT = { pending: 'на проверке', approved: 'принято', rejected: 'отклонено' };
+
+/** Поле выбора фото + сжатие. Возвращает getter, отдающий dataURL или null. */
+function photoField(form, name) {
+  const input = form.querySelector(`[name=${name}]`);
+  const preview = form.querySelector(`#${name}Preview`);
+  let data = null;
+  input.addEventListener('change', async () => {
+    data = null;
+    preview.innerHTML = '';
+    const file = input.files[0];
+    if (!file) return;
+    try {
+      data = await compressImage(file);
+      preview.innerHTML = `<img class="receipt" src="${data}" alt="">`;
+    } catch (e) { toast(errorText(e)); }
+  });
+  return () => data;
+}
+
+function payReportForm(target = 'dues') {
+  const m = myMember();
+  if (!m) return toast('Отправлять отчёт об оплате может только боец со своим входом');
+  const funds = state.funds.filter((f) => !f.closed);
+  const fee = feeFor(monthKey());
+  openSheet(`
+    <h2>Я перевёл</h2>
+    <label class="field">За что<select name="dest">
+      <option value="dues" ${target === 'dues' ? 'selected' : ''}>Ежемесячный взнос</option>
+      ${funds.map((f) => `<option value="${f.id}" ${target === f.id ? 'selected' : ''}>Сбор: ${esc(f.title)}</option>`).join('')}
+    </select></label>
+    <label class="field" id="monthField">За месяц (с него пойдёт в зачёт)<input type="month" name="month" value="${monthKey()}"></label>
+    <label class="field">Сумма<input type="number" inputmode="decimal" step="any" min="1" name="amount" required value="${target === 'dues' ? fee : (funds.find((f) => f.id === target)?.perPerson || '')}"></label>
+    <label class="field">Скрин чека<input type="file" name="photo" accept="image/*"></label>
+    <div id="photoPreview"></div>
+    <label class="field">Комментарий<input name="note" placeholder="например: за 3 месяца"></label>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Отправить на проверку</button>
+    </div>`, {
+    onMount(form) {
+      const getPhoto = photoField(form, 'photo');
+      form.dataset.ready = '1';
+      form._photo = getPhoto;
+      const sync = () => {
+        $('#monthField', form).hidden = form.dest.value !== 'dues';
+        const f = funds.find((x) => x.id === form.dest.value);
+        if (f?.perPerson) form.amount.value = f.perPerson;
+        if (form.dest.value === 'dues') form.amount.value = fee;
+      };
+      form.dest.addEventListener('change', sync);
+      sync();
+    },
+    onSubmit(fd) {
+      const photo = $('#sheetForm')._photo?.();
+      const report = {
+        memberId: m.id, target: fd.get('dest'), month: fd.get('month') || monthKey(), amount: Math.abs(Number(fd.get('amount')) || 0),
+        date: todayISO(), note: fd.get('note').trim(), status: 'pending', createdAt: Date.now(),
+      };
+      if (!report.amount) return false;
+      run(async () => {
+        if (photo) report.fileId = await store.putFile(photo, m.id);
+        await store.saveItem('payreports', report);
+      }, 'Отправлено — админ проверит');
+    },
+  });
+}
+
+function claimForm() {
+  const m = myMember();
+  if (!m) return toast('Заявку подаёт боец со своим входом; админ начисляет баллы через «+»');
+  const presets = POINT_PRESETS.flatMap(([, items]) => items).filter(([cat]) => !PENALTY.has(cat));
+  openSheet(`
+    <h2>Заявка на баллы</h2>
+    <label class="field">Что сделал (по Положению)<select name="preset">${POINT_PRESETS.filter(([g]) => g !== 'Штрафы').map(([group, list]) => `<optgroup label="${esc(group)}">${list.map(([, title, amount, hint]) =>
+      `<option value="${presets.findIndex((x) => x[1] === title)}">${esc(title)} — ${hint || amount}</option>`).join('')}</optgroup>`).join('')}</select></label>
+    <label class="field">Баллы<input type="number" inputmode="decimal" step="any" min="0" name="amount" required></label>
+    <label class="field">Когда<input type="date" name="date" required value="${todayISO()}"></label>
+    <label class="field">Ссылка (пост, ролик, фотоальбом)<input name="link" type="url" placeholder="https://vk.com/…"></label>
+    <label class="field">Фото-подтверждение<input type="file" name="photo" accept="image/*"></label>
+    <div id="photoPreview"></div>
+    <label class="field">Подробности<input name="note" placeholder="кого подвёз, что построил…"></label>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Отправить</button>
+    </div>`, {
+    onMount(form) {
+      form._photo = photoField(form, 'photo');
+      const sync = () => { form.amount.value = presets[Number(form.preset.value)][2]; };
+      form.preset.addEventListener('change', sync);
+      sync();
+    },
+    onSubmit(fd) {
+      const [cat, title] = presets[Number(fd.get('preset'))];
+      const photo = $('#sheetForm')._photo?.();
+      const claim = {
+        memberId: m.id, cat, title, amount: Math.abs(Number(fd.get('amount')) || 0), date: fd.get('date') || todayISO(),
+        link: fd.get('link').trim(), note: fd.get('note').trim(), status: 'pending', createdAt: Date.now(),
+      };
+      if (!claim.amount) return false;
+      run(async () => {
+        if (photo) claim.fileId = await store.putFile(photo, m.id);
+        await store.saveItem('claims', claim);
+      }, 'Заявка отправлена');
+    },
+  });
+}
+
+const pendingItems = () => [
+  ...state.payreports.filter((r) => r.status === 'pending').map((r) => ({ kind: 'pay', r })),
+  ...state.claims.filter((c) => c.status === 'pending').map((c) => ({ kind: 'claim', r: c })),
+].sort((a, b) => (a.r.createdAt || 0) - (b.r.createdAt || 0));
+
+const targetLabel = (r) => (r.target === 'dues' ? `взнос ${sinceLabel(r.month)}` : `сбор «${state.funds.find((f) => f.id === r.target)?.title || '—'}»`);
+
+/** Входящие админа: оплаты и заявки на баллы на проверку. */
+function inbox() {
+  const items = pendingItems();
+  openSheet(`
+    <h2>На проверку · ${items.length}</h2>
+    ${items.length ? `<ul class="list">${items.map(({ kind, r }) => `
+      <li class="static"><div class="grow">
+        <div class="name">${esc(shortName(memberById(r.memberId)))} — ${kind === 'pay' ? `перевёл ${money(r.amount)}` : `+${pts(r.amount)} балл.`}</div>
+        <div class="sub">${kind === 'pay' ? esc(targetLabel(r)) : esc(r.title)} · ${dayMonthLabel(r.date)}${r.note ? ` · ${esc(r.note)}` : ''}</div>
+        ${r.link ? `<div class="sub"><a href="${esc(r.link)}" target="_blank" rel="noopener">${esc(r.link)}</a></div>` : ''}
+        <div class="row" style="margin-top:8px">
+          ${r.fileId ? `<button type="button" class="btn small-btn" data-photo="${r.fileId}">${kind === 'pay' ? 'Чек' : 'Фото'}</button>` : ''}
+          <button type="button" class="btn small-btn" data-approve="${kind}:${r.id}">Принять</button>
+          <button type="button" class="btn small-btn danger" data-reject="${kind}:${r.id}">Отклонить</button>
+        </div>
+      </div></li>`).join('')}</ul>` : '<div class="list empty">Всё проверено ✓</div>'}
+    <div class="row"><button class="btn primary" value="close">Готово</button></div>`, {
+    onMount(form) {
+      form.querySelectorAll('[data-photo]').forEach((b) => b.addEventListener('click', () => showPhoto(b.dataset.photo, inbox)));
+      form.querySelectorAll('[data-approve]').forEach((b) => b.addEventListener('click', async () => {
+        const [kind, id] = b.dataset.approve.split(':');
+        b.disabled = true;
+        if (await run(() => (kind === 'pay' ? approvePay(id) : approveClaim(id)), 'Принято')) later(inbox);
+        else b.disabled = false;
+      }));
+      form.querySelectorAll('[data-reject]').forEach((b) => b.addEventListener('click', async () => {
+        const [kind, id] = b.dataset.reject.split(':');
+        const reason = prompt('Причина (боец её увидит):', '');
+        if (reason === null) return;
+        if (await run(() => store.saveItem(kind === 'pay' ? 'payreports' : 'claims', { id, status: 'rejected', reason, reviewedAt: Date.now() }), 'Отклонено')) later(inbox);
+      }));
+    },
+  });
+}
+
+async function approvePay(id) {
+  const r = state.payreports.find((x) => x.id === id);
+  if (r.target === 'dues') {
+    const month = r.month || monthKey();
+    if (state.settings.fees?.[month] == null) await store.setMonthFee(month, state.settings.fee);
+    await store.setPayments([{ month, memberId: r.memberId, amount: Math.round((paidAmount(r.memberId, month) + r.amount) * 100) / 100 }]);
+  } else {
+    const f = state.funds.find((x) => x.id === r.target);
+    if (!f) throw new Error('Сбор не найден');
+    const contributions = { ...(f.contributions || {}) };
+    contributions[r.memberId] = (Number(contributions[r.memberId]) || 0) + r.amount;
+    await store.saveItem('funds', { id: f.id, contributions });
+  }
+  await store.saveItem('payreports', { id, status: 'approved', reviewedAt: Date.now() });
+}
+
+async function approveClaim(id) {
+  const c = state.claims.find((x) => x.id === id);
+  await store.saveItem('points', { memberId: c.memberId, cat: c.cat, amount: c.amount, date: c.date, note: [c.title, c.note].filter(Boolean).join(': ') });
+  await store.saveItem('claims', { id, status: 'approved', reviewedAt: Date.now() });
+}
+
+async function showPhoto(fileId, back) {
+  let data = null;
+  try { data = await store.getFile(fileId); } catch (e) { /* нет доступа или файла */ }
+  openSheet(`
+    ${data ? `<img class="receipt big" src="${data}" alt="">` : '<div class="list empty">Фото не найдено</div>'}
+    <div class="row"><button class="btn primary" value="back">Назад</button></div>`, {
+    onSubmit() { if (back) later(back); },
+  });
+}
+
+/** Свои отчёты и заявки — бойцу видно, что принято, а что нет. */
+function myRequests() {
+  const id = me?.memberId;
+  if (!id) return '';
+  const items = [
+    ...state.payreports.filter((r) => r.memberId === id).map((r) => ({ r, text: `Перевод ${money(r.amount)} · ${targetLabel(r)}` })),
+    ...state.claims.filter((c) => c.memberId === id).map((c) => ({ r: c, text: `${c.title} · +${pts(c.amount)}` })),
+  ].sort((a, b) => (b.r.createdAt || 0) - (a.r.createdAt || 0)).slice(0, 4);
+  if (!items.length) return '';
+  return `<div class="small" style="margin-top:8px">${items.map(({ r, text }) =>
+    `<div>▸ ${esc(text)} — <b>${STATUS_TEXT[r.status] || r.status}</b>${r.reason ? ` (${esc(r.reason)})` : ''}</div>`).join('')}</div>`;
+}
+
+/* ---------- Целевые сборы ---------- */
+
+function fundCard(f) {
+  f = state.funds.find((x) => x.id === f.id) || f;
+  const admin = isAdmin();
+  const got = fundCollected(f);
+  const pct = f.goal ? Math.min(100, Math.round((got / f.goal) * 100)) : 0;
+  const payers = Object.entries(f.contributions || {}).filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  const notYet = f.perPerson ? activeMembers(monthKey()).filter((m) => m.status !== 'recruit' && (Number(f.contributions?.[m.id]) || 0) < f.perPerson) : [];
+  openSheet(`
+    <h2>${esc(f.title)}${f.closed ? ' <span class="chip">закрыт</span>' : ''}</h2>
+    <div class="muted">Собрано ${money(got)}${f.goal ? ` из ${money(f.goal)}` : ''}${f.perPerson ? ` · по ${money(f.perPerson)} с человека` : ''}${f.deadline ? ` · до ${dateLabel(f.deadline)}` : ''}</div>
+    ${f.goal ? `<div class="progress"><div style="width:${pct}%"></div></div>` : ''}
+    ${f.note ? `<div class="card" style="margin:0;white-space:pre-wrap">${esc(f.note)}</div>` : ''}
+    <h3 style="margin:4px 0 0">Сдали · ${payers.length}</h3>
+    ${payers.length ? `<ul class="list">${payers.map(([id, v]) => `<li class="static"><div class="grow"><div class="name">${esc(shortName(memberById(id)))}</div></div><div class="amt">${money(v)}</div></li>`).join('')}</ul>` : '<div class="small muted">Пока никто</div>'}
+    ${notYet.length ? `<h3 style="margin:4px 0 0">Ещё не сдали · ${notYet.length}</h3><div class="small">${notYet.map((m) => esc(shortName(m))).join(', ')}</div>` : ''}
+    <div class="row">
+      ${!f.closed && me?.memberId ? '<button class="btn" value="pay">Я перевёл</button>' : ''}
+      ${admin ? '<button class="btn" value="add">+ Взнос</button><button class="btn" value="edit">Изменить</button>' : ''}
+      ${notYet.length ? '<button type="button" class="btn" id="fundRemind">» Напомнить</button>' : ''}
+      <button class="btn primary" value="close">Готово</button>
+    </div>`, {
+    onMount(form) {
+      $('#fundRemind', form)?.addEventListener('click', () => shareText(
+        `💰 Сбор «${f.title}»: собрано ${money(got)}${f.goal ? ` из ${money(f.goal)}` : ''}.\nЕщё не сдали (${money(f.perPerson)}): ${notYet.map((m) => vkMention(m.vk) || shortName(m)).join(', ')}${f.deadline ? `\nСрок — ${dateLabel(f.deadline)}.` : ''}`));
+    },
+    onSubmit(fd, action) {
+      if (action === 'pay') later(() => payReportForm(f.id));
+      if (action === 'add') later(() => contributionForm(f));
+      if (action === 'edit') later(() => fundForm(f));
+    },
+  });
+}
+
+function fundForm(f) {
+  const isNew = !f;
+  f = f || { title: '', goal: '', perPerson: '', deadline: '', note: '', closed: false };
+  openSheet(`
+    <h2>${isNew ? 'Новый сбор' : 'Сбор'}</h2>
+    <label class="field">На что *<input name="title" required value="${esc(f.title)}" placeholder="Суточная игра «Рубеж», палатка…"></label>
+    <div class="row">
+      <label class="field" style="flex:1">Цель, ₽<input type="number" inputmode="decimal" step="any" min="0" name="goal" value="${f.goal || ''}"></label>
+      <label class="field" style="flex:1">С человека<input type="number" inputmode="decimal" step="any" min="0" name="perPerson" value="${f.perPerson || ''}"></label>
+    </div>
+    <label class="field">Собрать до<input type="date" name="deadline" value="${esc(f.deadline || '')}"></label>
+    <label class="field">Описание<textarea name="note">${esc(f.note || '')}</textarea></label>
+    ${!isNew ? `<label class="toggle"><input type="checkbox" name="closed" ${f.closed ? 'checked' : ''}> Сбор закрыт</label>` : ''}
+    <div class="row">
+      ${!isNew ? '<button class="btn danger" value="delete" formnovalidate>Удалить</button>' : ''}
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Сохранить</button>
+    </div>`, {
+    onSubmit(fd, action) {
+      if (action === 'delete') {
+        if (!confirm('Удалить сбор? Внесённые суммы пропадут из казны.')) return false;
+        run(() => store.deleteItem('funds', f.id));
+        return;
+      }
+      run(() => store.saveItem('funds', {
+        id: f.id, title: fd.get('title').trim(), goal: Number(fd.get('goal')) || 0, perPerson: Number(fd.get('perPerson')) || 0,
+        deadline: fd.get('deadline') || '', note: fd.get('note').trim(), closed: fd.get('closed') === 'on',
+        ...(isNew ? { contributions: {} } : {}),
+      }), 'Сохранено');
+    },
+  });
+}
+
+function contributionForm(f) {
+  const members = activeMembers(monthKey());
+  openSheet(`
+    <h2>Взнос в «${esc(f.title)}»</h2>
+    <label class="field">Кто<select name="memberId">${members.map((m) => `<option value="${m.id}">${esc(displayName(m))}</option>`).join('')}</select></label>
+    <label class="field">Сколько всего сдал<input type="number" inputmode="decimal" step="any" min="0" name="amount" value="${f.perPerson || ''}"></label>
+    <div class="row">
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Сохранить</button>
+    </div>`, {
+    onSubmit(fd) {
+      const contributions = { ...(f.contributions || {}) };
+      const v = Math.max(0, Number(fd.get('amount')) || 0);
+      if (v) contributions[fd.get('memberId')] = v; else contributions[fd.get('memberId')] = 0;
+      run(() => store.saveItem('funds', { id: f.id, contributions }), 'Сохранено').then((ok) => { if (ok) later(() => fundCard(f)); });
+    },
+  });
+}
+
+/* ---------- Хрон-журнал ---------- */
+
+const joules = (speed, bb) => 0.5 * (Number(bb) / 1000) * Number(speed) ** 2;
+
+function chronoForm(c) {
+  const admin = isAdmin();
+  const isNew = !c;
+  c = c || { memberId: me?.memberId || '', gun: '', speed: '', bb: 0.2, date: todayISO(), note: '' };
+  const last = state.chrono.filter((x) => x.memberId === c.memberId).sort((a, b) => b.date.localeCompare(a.date))[0];
+  if (isNew && last) c.gun = last.gun;
+  const members = activeMembers(monthKey());
+  openSheet(`
+    <h2>${isNew ? 'Замер на хроне' : 'Замер'}</h2>
+    ${admin ? `<label class="field">Боец<select name="memberId">${members.map((m) => `<option value="${m.id}" ${m.id === c.memberId ? 'selected' : ''}>${esc(displayName(m))}</option>`).join('')}</select></label>` : ''}
+    <label class="field">Привод<input name="gun" required value="${esc(c.gun)}" placeholder="M4 CYMA, СВД…"></label>
+    <div class="row">
+      <label class="field" style="flex:1">Скорость, м/с<input type="number" inputmode="decimal" step="any" min="1" name="speed" required value="${c.speed}"></label>
+      <label class="field" style="flex:1">Шар, г<input type="number" inputmode="decimal" step="any" min="0.1" name="bb" required value="${c.bb}"></label>
+    </div>
+    <div class="small" id="joules"></div>
+    <label class="field">Дата<input type="date" name="date" required value="${c.date}"></label>
+    <label class="field">Заметка<input name="note" value="${esc(c.note)}" placeholder="полигон, хронограф…"></label>
+    <div class="row">
+      ${!isNew ? '<button class="btn danger" value="delete" formnovalidate>Удалить</button>' : ''}
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Сохранить</button>
+    </div>`, {
+    onMount(form) {
+      const upd = () => { const j = joules(form.speed.value, form.bb.value); $('#joules', form).textContent = j ? `Энергия: ${j.toFixed(2)} Дж` : ''; };
+      form.speed.addEventListener('input', upd);
+      form.bb.addEventListener('input', upd);
+      upd();
+    },
+    onSubmit(fd, action) {
+      if (action === 'delete') { run(() => store.deleteItem('chrono', c.id)); return; }
+      const memberId = admin ? fd.get('memberId') : me?.memberId;
+      if (!memberId) { toast('В локальном режиме выберите бойца'); return false; }
+      run(() => store.saveItem('chrono', {
+        id: c.id, memberId, gun: fd.get('gun').trim(), speed: Number(fd.get('speed')) || 0, bb: Number(fd.get('bb')) || 0.2,
+        date: fd.get('date') || todayISO(), note: fd.get('note').trim(),
+      }), 'Замер сохранён');
+    },
+  });
+}
+
+/* ---------- Положение ---------- */
+
+/** Мини-Markdown: заголовки #, ##, ###, списки «* », **жирный**. */
+function mdToHtml(text) {
+  const inline = (t) => esc(t).replace(/\*\*(.+?)\*\*/g, '<b>$1</b>');
+  const out = [];
+  let list = false;
+  for (const raw of text.split('\n')) {
+    const line = raw.trim();
+    const li = line.match(/^[*-]\s+(.*)$/);
+    if (li) { if (!list) { out.push('<ul>'); list = true; } out.push(`<li>${inline(li[1])}</li>`); continue; }
+    if (list) { out.push('</ul>'); list = false; }
+    if (!line || line === '---') continue;
+    const h = line.match(/^(#{1,3})\s+(.*)$/);
+    if (h) out.push(`<h${h[1].length + 1}>${inline(h[2])}</h${h[1].length + 1}>`);
+    else out.push(`<p>${inline(line)}</p>`);
+  }
+  if (list) out.push('</ul>');
+  return out.join('');
+}
+
+function regulationSheet() {
+  const text = state.settings.regulation || DEFAULT_REGULATION;
+  openSheet(`
+    <div class="regulation">${mdToHtml(text)}</div>
+    <div class="row">
+      ${isAdmin() ? '<button class="btn" value="edit">Изменить</button>' : ''}
+      <button class="btn primary" value="close">Закрыть</button>
+    </div>`, {
+    onSubmit(fd, action) { if (action === 'edit') later(regulationEdit); },
+  });
+}
+
+function regulationEdit() {
+  openSheet(`
+    <h2>Положение</h2>
+    <p class="small muted" style="margin:0"># заголовок, ## раздел, * пункт списка, **жирный**.</p>
+    <label class="field"><textarea name="text" rows="18">${esc(state.settings.regulation || DEFAULT_REGULATION)}</textarea></label>
+    <div class="row">
+      <button class="btn" value="reset" formnovalidate>Вернуть исходное</button>
+      <button class="btn" value="cancel" formnovalidate>Отмена</button>
+      <button class="btn primary" value="save">Сохранить</button>
+    </div>`, {
+    onSubmit(fd, action) {
+      const text = action === 'reset' ? '' : fd.get('text').trim();
+      run(() => store.saveSettings({ regulation: text }), 'Положение сохранено');
     },
   });
 }
@@ -1227,6 +1741,7 @@ function settingsForm() {
       <label class="field" style="flex:1">Проверять норму с<input type="month" name="quotaSince" value="${s.quotaSince || monthKey()}"></label>
       <label class="field" style="flex:1">Отпуск, мес./год<input type="number" inputmode="numeric" min="0" name="leaveMaxPerYear" value="${s.leaveMaxPerYear ?? 2}"></label>
     </div>
+    <label class="field">Чек-лист перед игрой, по пункту на строку<textarea name="checklist" rows="6">${esc((s.checklist?.length ? s.checklist : DEFAULT_CHECKLIST).join('\n'))}</textarea></label>
     <label class="field">Звания: «баллы звание», по строке на звание<textarea name="ranks" rows="8">${esc(ranks)}</textarea></label>
     <div class="small muted">Изменение взноса не меняет суммы уже начатых месяцев — их можно поправить на экране «Взносы».</div>
     <div class="row">
@@ -1248,6 +1763,7 @@ function settingsForm() {
         leaveMaxPerYear: Math.max(0, Number(fd.get('leaveMaxPerYear')) || 0),
         quotaSince: quarterOf(`${fd.get('quotaSince') || monthKey()}-01`).start.slice(0, 7),
         ranks: parsedRanks.length ? parsedRanks : s.ranks,
+        checklist: fd.get('checklist').split('\n').map((x) => x.trim()).filter(Boolean),
       }), 'Сохранено');
     },
   });
@@ -1327,6 +1843,15 @@ const ACTIONS = {
   },
   shareDues() { shareText(duesReport(ui.month)); },
   remindAll() { shareText(reminderText()); },
+  openInbox() { inbox(); },
+  payReport() { payReportForm(); },
+  addClaim() { claimForm(); },
+  addFund() { fundForm(); },
+  openFund(id) { fundCard(state.funds.find((f) => f.id === id)); },
+  addChrono() { chronoForm(); },
+  editChrono(id) { chronoForm(state.chrono.find((c) => c.id === id)); },
+  openRegulation() { regulationSheet(); },
+  toggleSound() { setSound(!soundOn()); render(); },
   addPoints() { pointsForm(); },
   remindDebtors() {
     const text = debtorsReport();
@@ -1422,6 +1947,9 @@ const ACTIONS = {
 
 /* ================= Запуск ================= */
 
+boot();
+initClicks();
+
 $('#tabbar').addEventListener('click', (e) => {
   const b = e.target.closest('button[data-tab]');
   if (!b) return;
@@ -1447,4 +1975,4 @@ if ('serviceWorker' in navigator && location.protocol !== 'file:' && !new URLSea
 }
 
 // Для отладки из консоли.
-window.__tgt = { store, get state() { return state; }, get me() { return me; }, duesReport, debtorsReport, attendanceStats };
+window.__tgt = { store, get state() { return state; }, get me() { return me; }, duesReport, debtorsReport, attendanceStats, pointsSummary };

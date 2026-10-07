@@ -225,3 +225,31 @@ body.auth { padding-bottom: 0; }
 .card-ok { border-color: var(--text); }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 8px 14px; font-size: 14px; }
 .kv > div:nth-child(odd) { color: var(--muted); text-transform: uppercase; font-size: 12px; letter-spacing: 1px; padding-top: 2px; }
+
+/* v3: загрузочный экран терминала */
+.boot {
+  position: fixed; inset: 0; z-index: 100; background: var(--bg); color: var(--text);
+  padding: calc(24px + env(safe-area-inset-top)) 18px 24px; overflow: hidden;
+  display: flex; flex-direction: column; justify-content: space-between;
+  transition: opacity .35s;
+}
+.boot pre { margin: 0; font: 13px/1.6 "Plex Mono", ui-monospace, monospace; white-space: pre-wrap; text-shadow: var(--glow); }
+.boot pre::after { content: "█"; animation: blink 1s steps(1) infinite; }
+.boot-skip { font-size: 11px; color: var(--muted); text-align: center; text-transform: uppercase; letter-spacing: 2px; }
+.boot-out { opacity: 0; }
+@keyframes blink { 50% { opacity: 0; } }
+
+.checklist { display: flex; flex-direction: column; gap: 10px; padding: 4px 2px; }
+img.receipt { max-width: 100%; max-height: 220px; border: 1px solid var(--border); border-radius: 2px; filter: sepia(.2) hue-rotate(60deg) saturate(.8); }
+img.receipt.big { max-height: 70dvh; display: block; margin: 0 auto; filter: none; }
+
+.regulation h2 { font-size: 16px; line-height: 1.35; }
+.regulation h3 { font-size: 13px; margin: 18px 0 6px; color: var(--text); }
+.regulation h3::before { content: "▸"; }
+.regulation h3::after { display: none; }
+.regulation h4 { font-size: 13px; margin: 12px 0 4px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; }
+.regulation p { margin: 6px 0; font-size: 14px; }
+.regulation ul { margin: 4px 0 8px; padding-left: 0; list-style: none; font-size: 14px; }
+.regulation li { padding-left: 16px; position: relative; margin: 3px 0; }
+.regulation li::before { content: "-"; position: absolute; left: 2px; color: var(--muted); }
+.regulation b { background: var(--surface-2); padding: 0 3px; }

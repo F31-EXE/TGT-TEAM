@@ -16,15 +16,24 @@ export const emptyState = () => ({
   settings: {
     teamName: 'TGT Team', fee: 300, currency: '₽', startBalance: 0, fees: {},
     ranks: DEFAULT_RANKS, pointsMin: 18, veteranPenalty: 50, leaveMaxPerYear: 2, quotaSince: null,
-    reminderText: '', reminderDays: [1, 22],
+    reminderText: '', reminderDays: [1, 22], checklist: DEFAULT_CHECKLIST, regulation: '',
   },
   members: [],   // {id, name, callsign, number, group, groupLead, veteran, leaves:['YYYY-MM'], vk, birthday, status:'recruit'|'fighter'|'pause', pauses:[{from,to}], feeFrom, from, left, exempt, pointsBase, admin, login, uid}
   payments: {},  // {'YYYY-MM': {memberId: amount}}
   expenses: [],  // {id, date, title, amount, category, kind:'out'|'in'}
   events: [],    // {id, date, time, title, place, notes, attendance:{memberId:'yes'|'maybe'|'no'}}
   gear: [],      // {id, name, qty, holderId, note}
-  points: [],    // {id, memberId, date, cat:'game'|'training'|'contribution'|'discipline'|'safety', amount, note}
+  points: [],    // {id, memberId, date, cat, amount, note}
+  claims: [],    // заявки бойцов на баллы: {id, memberId, cat, title, amount, date, note, link, fileId, status:'pending'|'approved'|'rejected', reason, createdAt}
+  payreports: [], // «Я перевёл»: {id, memberId, target:'dues'|fundId, month, amount, date, fileId, note, status, reason, createdAt}
+  funds: [],     // целевые сборы: {id, title, goal, perPerson, deadline, note, closed, contributions:{memberId: amount}}
+  chrono: [],    // хрон-журнал: {id, memberId, gun, speed (м/с), bb (г), date, note}
 });
+
+export const DEFAULT_CHECKLIST = [
+  'Защитные очки / маска', 'Привод и магазины', 'Аккумуляторы заряжены', 'Шары', 'Рация заряжена',
+  'Аптечка, жгут', 'Вода и еда', 'Документы', 'Хрон пройден',
+];
 
 /** Приводит данные старых версий и импортов к текущему виду. */
 export function normalizeState(raw) {
@@ -33,9 +42,11 @@ export function normalizeState(raw) {
   if (raw && raw.fees) s.settings.fees = { ...raw.fees, ...s.settings.fees };
   delete s.fees;
   s.members = s.members.map(normalizeMember);
-  s.events = s.events.map((e) => ({ attendance: {}, ...e }));
+  s.events = s.events.map(normalizeEvent);
   return s;
 }
+
+export const normalizeEvent = (e) => ({ attendance: {}, checks: {}, rides: {}, ...e });
 
 export function normalizeMember(m) {
   const out = {
@@ -48,7 +59,16 @@ export function normalizeMember(m) {
   return out;
 }
 
-const COLLECTIONS = ['members', 'expenses', 'events', 'gear', 'points'];
+const COLLECTIONS = ['members', 'expenses', 'events', 'gear', 'points', 'claims', 'payreports', 'funds', 'chrono'];
+const MEMBER_OWNED = ['points', 'claims', 'payreports', 'chrono'];
+
+/** Записывает значение по вложенному пути объекта; null/undefined удаляет ключ. */
+function setPath(obj, path, value) {
+  let o = obj;
+  for (const k of path.slice(0, -1)) o = o[k] && typeof o[k] === 'object' ? o[k] : (o[k] = {});
+  const last = path[path.length - 1];
+  if (value === null || value === undefined) delete o[last]; else o[last] = value;
+}
 
 /* ============================ Локальный режим ============================ */
 
@@ -94,9 +114,26 @@ class LocalStore {
     for (const mo of Object.values(s.payments)) delete mo[m.id];
     for (const ev of s.events) delete ev.attendance[m.id];
     for (const g of s.gear) if (g.holderId === m.id) g.holderId = '';
-    s.points = s.points.filter((x) => x.memberId !== m.id);
+    for (const coll of MEMBER_OWNED) s[coll] = s[coll].filter((x) => x.memberId !== m.id);
     this._commit();
   }
+
+  /** Изменяет вложенное поле события: ['checks', memberId] и т. п. */
+  async setEventField(eventId, path, value) {
+    const ev = this.state.events.find((e) => e.id === eventId);
+    if (!ev) return;
+    setPath(ev, path, value);
+    this._commit();
+  }
+
+  // Фото чеков и подтверждений хранятся отдельно от данных, чтобы не раздувать их.
+  async putFile(data, memberId) {
+    const id = uid();
+    try { localStorage.setItem(`tgt-file-${id}`, JSON.stringify({ data, memberId })); } catch (e) { throw new Error('Не хватает места на устройстве для фото'); }
+    return id;
+  }
+  async getFile(id) { try { return JSON.parse(localStorage.getItem(`tgt-file-${id}`))?.data || null; } catch (e) { return null; } }
+  async deleteFile(id) { localStorage.removeItem(`tgt-file-${id}`); }
 
   /** list: [{month, memberId, amount}] — amount 0 удаляет оплату. */
   async setPayments(list) {
@@ -228,7 +265,7 @@ class FirebaseStore {
       this.unsubs.push(F.onSnapshot(F.collection(this.db, coll), (qs) => {
         const arr = [];
         qs.forEach((d) => arr.push({ ...d.data(), id: d.id }));
-        this.state[coll] = coll === 'members' ? arr.map(normalizeMember) : coll === 'events' ? arr.map((e) => ({ attendance: {}, ...e })) : arr;
+        this.state[coll] = coll === 'members' ? arr.map(normalizeMember) : coll === 'events' ? arr.map(normalizeEvent) : arr;
         emit();
       }, () => {}));
     }
@@ -344,7 +381,7 @@ class FirebaseStore {
       if (ev.attendance && m.id in ev.attendance) ops.push((b) => b.update(this.ref('events', ev.id), new F.FieldPath('attendance', m.id), F.deleteField()));
     }
     for (const g of this.state.gear) if (g.holderId === m.id) ops.push((b) => b.update(this.ref('gear', g.id), { holderId: '' }));
-    for (const p of this.state.points) if (p.memberId === m.id) ops.push((b) => b.delete(this.ref('points', p.id)));
+    for (const coll of MEMBER_OWNED) for (const x of this.state[coll]) if (x.memberId === m.id) ops.push((b) => b.delete(this.ref(coll, x.id)));
     ops.push((b) => b.delete(this.ref('members', m.id)));
     await this._batched(ops);
   }
@@ -359,6 +396,20 @@ class FirebaseStore {
     const { F } = this;
     await F.updateDoc(this.ref('events', eventId), new F.FieldPath('attendance', memberId), value || F.deleteField());
   }
+
+  async setEventField(eventId, path, value) {
+    const { F } = this;
+    await F.updateDoc(this.ref('events', eventId), new F.FieldPath(...path), value === null || value === undefined ? F.deleteField() : value);
+  }
+
+  // Фото храним в Firestore (сжатыми до ~100 КБ): Firebase Storage на бесплатном тарифе недоступен.
+  async putFile(data, memberId) {
+    const id = uid();
+    await this.F.setDoc(this.ref('files', id), { data, memberId: memberId || null, createdAt: Date.now() });
+    return id;
+  }
+  async getFile(id) { const snap = await this.F.getDoc(this.ref('files', id)); return snap.exists() ? snap.data().data : null; }
+  async deleteFile(id) { await this.F.deleteDoc(this.ref('files', id)).catch(() => {}); }
 
   async importBulk(data) {
     const ops = [];
