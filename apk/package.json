@@ -1,0 +1,21 @@
+{
+  "name": "tgt-team-android",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Android-оболочка (Capacitor) для приложения TGT Team",
+  "scripts": {
+    "sync": "cap sync android",
+    "icons": "capacitor-assets generate --android --iconBackgroundColor '#020802' --iconBackgroundColorDark '#020802' --splashBackgroundColor '#020802' --splashBackgroundColorDark '#020802'"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.5.3",
+    "@capacitor/core": "^8.5.3",
+    "@capacitor/filesystem": "^8.1.4",
+    "@capacitor/share": "^8.0.3",
+    "@capacitor/status-bar": "^8.0.4"
+  },
+  "devDependencies": {
+    "@capacitor/assets": "^3.0.5",
+    "@capacitor/cli": "^8.5.3"
+  }
+}

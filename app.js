@@ -295,7 +295,14 @@ async function run(fn, okText) {
   }
 }
 
+// В Android-приложении (Capacitor) есть нативные «Поделиться» и файлы; в браузере — веб-API.
+const native = () => window.Capacitor?.isNativePlatform?.() ? window.Capacitor.Plugins : null;
+
 async function shareText(text) {
+  const n = native();
+  if (n?.Share) {
+    try { await n.Share.share({ text, dialogTitle: 'Отправить' }); return; } catch (e) { if (/cancel/i.test(e?.message || '')) return; }
+  }
   if (navigator.share) {
     try { await navigator.share({ text }); return; } catch (e) { if (e.name === 'AbortError') return; }
   }
@@ -303,8 +310,23 @@ async function shareText(text) {
   catch (e) { prompt('Скопируйте текст:', text); }
 }
 
-function download(name, content, type) {
+async function download(name, content, type) {
   const blob = content instanceof Blob ? content : new Blob([content], { type });
+  const n = native();
+  if (n?.Filesystem && n?.Share) {
+    // WebView не умеет скачивать файлы: сохраняем во временную папку и отдаём в «Поделиться».
+    try {
+      const data = await new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result).split(',')[1]);
+        r.onerror = reject;
+        r.readAsDataURL(blob);
+      });
+      const { uri } = await n.Filesystem.writeFile({ path: name, data, directory: 'CACHE' });
+      await n.Share.share({ title: name, files: [uri], dialogTitle: 'Сохранить или отправить' });
+    } catch (e) { if (!/cancel/i.test(e?.message || '')) toast('Не удалось сохранить файл'); }
+    return;
+  }
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = name;
@@ -1883,7 +1905,7 @@ const ACTIONS = {
   logout() { store.logout(); },
 
   exportExcel() {
-    run(() => exportXlsx(state, { expectedFor, paidAmount, memberDebt, attendanceStats, displayName, feeFor, isActiveIn, treasuryBalance, pointsSummary, POINT_CATS, inPause }));
+    run(() => exportXlsx(state, download, { expectedFor, paidAmount, memberDebt, attendanceStats, displayName, feeFor, isActiveIn, treasuryBalance, pointsSummary, POINT_CATS, inPause }));
   },
   async importExcel() {
     const file = await pickFile('.xlsx,.xls,.xlsm,.ods,.csv,.txt');

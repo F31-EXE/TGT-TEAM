@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Цвета Pip-Boy: тёмный фон, зелёный люминофор -->
+    <color name="colorPrimary">#020802</color>
+    <color name="colorPrimaryDark">#020802</color>
+    <color name="colorAccent">#3DFF7A</color>
+</resources>

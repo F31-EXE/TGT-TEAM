@@ -1,0 +1,64 @@
+# Сборка Android-приложения (APK) и публикация в Releases.
+name: Android APK
+
+on:
+  push:
+    branches: [claude/festive-maxwell-nadb5j, main]
+    paths: ['apk/**', '.github/workflows/apk.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  apk:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apk
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apk/package-lock.json
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+          cache: gradle
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Зависимости и синхронизация Capacitor
+        run: |
+          npm ci
+          npx cap sync android
+
+      - name: Сборка APK
+        working-directory: apk/android
+        run: |
+          chmod +x gradlew
+          ./gradlew --no-daemon assembleDebug
+          mkdir -p ../out
+          cp app/build/outputs/apk/debug/app-debug.apk ../out/tgt-team.apk
+          ls -la ../out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tgt-team-apk
+          path: apk/out/tgt-team.apk
+
+      - name: Публикация в Releases
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: apk-${{ github.run_number }}
+          name: TGT Team для Android (сборка ${{ github.run_number }})
+          make_latest: true
+          files: apk/out/tgt-team.apk
+          body: |
+            Установка: скачайте `tgt-team.apk` на телефон и откройте. Android попросит разрешить установку из этого источника.
+            Приложение загружает актуальную версию с https://f31-exe.github.io/TGT-TEAM/ — обновлять APK нужно редко.

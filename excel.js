@@ -23,7 +23,7 @@ const cap = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 /**
  * calc — функции расчёта из app.js: expectedFor, paidAmount, memberDebt, attendanceStats, displayName, feeFor, treasuryBalance.
  */
-export async function exportXlsx(state, calc) {
+export async function exportXlsx(state, save, calc) {
   const XLSX = await loadXLSX();
   const wb = XLSX.utils.book_new();
   const add = (name, rows, widths) => {
@@ -98,7 +98,9 @@ export async function exportXlsx(state, calc) {
     ...state.gear.map((g) => [g.name, g.qty, g.holderId ? nick(g.holderId) : 'склад', g.note || '']),
   ], [26, 8, 16, 30]);
 
-  XLSX.writeFile(wb, `${state.settings.teamName || 'team'}-${todayISO()}.xlsx`);
+  const data = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  await save(`${state.settings.teamName || 'team'}-${todayISO()}.xlsx`,
+    new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
 }
 
 function shiftMonthLocal(key, delta) {
