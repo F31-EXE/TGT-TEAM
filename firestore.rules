@@ -52,6 +52,11 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    match /points/{id} {
+      allow read: if isMember();
+      allow write: if isAdmin();
+    }
+
     match /gear/{id} {
       allow read: if isMember();
       allow write: if isAdmin();

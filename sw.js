@@ -1,5 +1,5 @@
 // Офлайн-кэш приложения. При изменении файлов увеличьте версию.
-const CACHE = 'tgt-team-v3';
+const CACHE = 'tgt-team-v4';
 const ASSETS = [
   './', 'index.html', 'styles.css', 'app.js', 'store.js', 'util.js', 'excel.js', 'firebase-config.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png',

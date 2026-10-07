@@ -4,13 +4,25 @@
 import { firebaseConfig } from './firebase-config.js';
 import { uid, monthKey, normLogin } from './util.js';
 
+// Звания по сумме баллов (порог → звание). Админ может поменять в настройках.
+export const DEFAULT_RANKS = [
+  [0, 'Рядовой'], [50, 'Ефрейтор'], [100, 'Младший сержант'], [150, 'Сержант'], [200, 'Старший сержант'],
+  [250, 'Старшина'], [300, 'Старший прапорщик'], [350, 'Младший лейтенант'], [400, 'Лейтенант'],
+  [450, 'Старший лейтенант'], [500, 'Капитан'], [550, 'Майор'], [600, 'Подполковник'], [650, 'Полковник'],
+  [700, 'Генерал-майор'], [750, 'Генерал-лейтенант'], [800, 'Генерал-полковник'], [850, 'Генерал армии'], [900, 'Маршал'],
+].map(([min, title]) => ({ min, title }));
+
 export const emptyState = () => ({
-  settings: { teamName: 'TGT Team', fee: 1000, currency: '₽', startBalance: 0, fees: {} },
-  members: [],   // {id, name, callsign, vk, birthday, status:'recruit'|'fighter', feeFrom, from, left, exempt, admin, login, uid}
+  settings: {
+    teamName: 'TGT Team', fee: 300, currency: '₽', startBalance: 0, fees: {},
+    ranks: DEFAULT_RANKS, pointsMin: 18, reminderText: '', paymentDetails: '', reminderDays: [1, 22],
+  },
+  members: [],   // {id, name, callsign, number, group, groupLead, vk, birthday, status:'recruit'|'fighter'|'pause', pauses:[{from,to}], feeFrom, from, left, exempt, pointsBase, admin, login, uid}
   payments: {},  // {'YYYY-MM': {memberId: amount}}
   expenses: [],  // {id, date, title, amount, category, kind:'out'|'in'}
   events: [],    // {id, date, time, title, place, notes, attendance:{memberId:'yes'|'maybe'|'no'}}
   gear: [],      // {id, name, qty, holderId, note}
+  points: [],    // {id, memberId, date, cat:'game'|'training'|'contribution'|'discipline'|'safety', amount, note}
 });
 
 /** Приводит данные старых версий и импортов к текущему виду. */
@@ -25,14 +37,17 @@ export function normalizeState(raw) {
 }
 
 export function normalizeMember(m) {
-  const out = { status: 'fighter', feeFrom: null, left: null, exempt: false, admin: false, vk: '', birthday: '', callsign: '', ...m };
+  const out = {
+    status: 'fighter', feeFrom: null, left: null, exempt: false, admin: false, vk: '', birthday: '', callsign: '',
+    number: '', group: '', groupLead: false, pointsBase: 0, pauses: [], ...m,
+  };
   if (!out.vk && m.phone) out.vk = m.phone; // v1: поле «Телефон / Telegram»
   delete out.phone;
   delete out.role;
   return out;
 }
 
-const COLLECTIONS = ['members', 'expenses', 'events', 'gear'];
+const COLLECTIONS = ['members', 'expenses', 'events', 'gear', 'points'];
 
 /* ============================ Локальный режим ============================ */
 
@@ -78,6 +93,7 @@ class LocalStore {
     for (const mo of Object.values(s.payments)) delete mo[m.id];
     for (const ev of s.events) delete ev.attendance[m.id];
     for (const g of s.gear) if (g.holderId === m.id) g.holderId = '';
+    s.points = s.points.filter((x) => x.memberId !== m.id);
     this._commit();
   }
 
@@ -327,6 +343,7 @@ class FirebaseStore {
       if (ev.attendance && m.id in ev.attendance) ops.push((b) => b.update(this.ref('events', ev.id), new F.FieldPath('attendance', m.id), F.deleteField()));
     }
     for (const g of this.state.gear) if (g.holderId === m.id) ops.push((b) => b.update(this.ref('gear', g.id), { holderId: '' }));
+    for (const p of this.state.points) if (p.memberId === m.id) ops.push((b) => b.delete(this.ref('points', p.id)));
     ops.push((b) => b.delete(this.ref('members', m.id)));
     await this._batched(ops);
   }
