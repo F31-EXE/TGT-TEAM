@@ -554,7 +554,12 @@ const VIEWS = {
     for (const mo of Object.values(state.payments)) for (const v of Object.values(mo)) dues += v;
     const out = state.expenses.filter((e) => e.kind !== 'in').reduce((a, e) => a + e.amount, 0);
     const inc = state.expenses.filter((e) => e.kind === 'in').reduce((a, e) => a + e.amount, 0);
-    const list = [...state.expenses].sort((a, b) => b.date.localeCompare(a.date));
+    // Взносы показываем в операциях одной строкой на месяц — видно, откуда пришли деньги.
+    const duesOps = Object.entries(state.payments)
+      .map(([month, mo]) => ({ month, amount: Object.values(mo).reduce((a, v) => a + v, 0), count: Object.values(mo).filter((v) => v > 0).length }))
+      .filter((o) => o.amount > 0)
+      .map((o) => ({ ...o, dues: true, sort: `${o.month}-99` }));
+    const ops = [...state.expenses.map((e) => ({ e, sort: e.date })), ...duesOps].sort((a, b) => b.sort.localeCompare(a.sort));
     const byCat = {};
     for (const e of state.expenses) if (e.kind !== 'in') byCat[e.category || 'Прочее'] = (byCat[e.category || 'Прочее'] || 0) + e.amount;
     const cats = Object.entries(byCat).sort((a, b) => b[1] - a[1]);
@@ -583,10 +588,14 @@ const VIEWS = {
         <div class="progress" style="margin:6px 0 0"><div style="width:${Math.round((v / out) * 100)}%"></div></div></div>
         <div class="amt">${money(v)}</div></li>`).join('')}</ul>` : ''}
       <h3>Операции</h3>
-      ${list.length ? `<ul class="list">${list.map((e) => `
-        <li ${admin ? `data-act="editExpense" data-id="${e.id}"` : 'class="static"'}>
-          <div class="grow"><div class="name">${esc(e.title)}</div><div class="sub">${dateLabel(e.date)}${e.category ? ` · ${esc(e.category)}` : ''}</div></div>
-          <div class="amt ${e.kind === 'in' ? 'pos' : 'neg'}">${e.kind === 'in' ? '+' : '−'}${money(e.amount)}</div>
+      ${ops.length ? `<ul class="list">${ops.map((o) => o.dues ? `
+        <li data-act="openDuesMonth" data-id="${o.month}">
+          <div class="grow"><div class="name">Взносы за ${monthLabel(o.month)}</div><div class="sub">${o.count} чел. · нажмите, чтобы открыть месяц</div></div>
+          <div class="amt pos">+${money(o.amount)}</div>
+        </li>` : `
+        <li ${admin ? `data-act="editExpense" data-id="${o.e.id}"` : 'class="static"'}>
+          <div class="grow"><div class="name">${esc(o.e.title)}</div><div class="sub">${dateLabel(o.e.date)}${o.e.category ? ` · ${esc(o.e.category)}` : ''}</div></div>
+          <div class="amt ${o.e.kind === 'in' ? 'pos' : 'neg'}">${o.e.kind === 'in' ? '+' : '−'}${money(o.e.amount)}</div>
         </li>`).join('')}</ul>` : '<div class="list empty">Операций пока нет. Аренда полигона, пиротехника, шевроны — всё сюда.</div>'}
       ${admin ? '<button class="fab" data-act="addExpense" aria-label="Добавить операцию">+</button>' : ''}`;
   },
@@ -1866,6 +1875,7 @@ const ACTIONS = {
   openFund(id) { fundCard(state.funds.find((f) => f.id === id)); },
   openRegulation() { regulationSheet(); },
   openRegistry() { registrySheet(); },
+  openDuesMonth(id) { ui.tab = 'dues'; ui.month = id; render(); window.scrollTo(0, 0); },
   toggleSound() { setSound(!soundOn()); render(); },
   addPoints() { pointsForm(); },
   remindDebtors() {
